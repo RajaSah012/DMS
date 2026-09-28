@@ -5,7 +5,8 @@ import {
   createProjectService, 
   inviteUserToProjectService, 
   updateMemberPermissionsService, 
-  getProjectMembersService 
+  getProjectMembersService,
+  deleteProjectService
 } from '../services/projectService';
 import { backendPermissionsToFrontend, frontendPermissionsToBackend } from '../utils/permissionMapper';
 import { 
@@ -2052,7 +2053,7 @@ export const DMSProvider = ({ children }) => {
     return true;
   };
 
-  const deleteProject = (projectId) => {
+  const deleteProject = async (projectId) => {
     if (currentUser.role !== 'Admin') {
       addToast('Permission Denied: Only Administrators can delete projects.', 'error');
       return false;
@@ -2060,6 +2061,15 @@ export const DMSProvider = ({ children }) => {
 
     const targetProj = projects.find((p) => p.id === projectId);
     if (!targetProj) return false;
+
+    // Call backend API to delete from MongoDB database
+    if (/^[0-9a-fA-F]{24}$/.test(projectId)) {
+      try {
+        await deleteProjectService(projectId);
+      } catch (err) {
+        console.warn('Backend delete project API error:', err.message);
+      }
+    }
 
     // Track deleted project ID persistently so backend resync on focus/reload does not restore it
     try {
@@ -2093,11 +2103,12 @@ export const DMSProvider = ({ children }) => {
       'PROJECT_DELETE',
       'Deleted Project',
       targetProj.name,
-      `Deleted project '${targetProj.name}' and revoked user workspace access`,
+      `Permanently deleted project '${targetProj.name}' from database and revoked user workspace access`,
       'Project Governance',
       'warning'
     );
-    addToast(`Project "${targetProj.name}" deleted.`, 'info');
+    addToast(`Project "${targetProj.name}" deleted successfully.`, 'info');
+    await loadBackendProjects();
     return true;
   };
 

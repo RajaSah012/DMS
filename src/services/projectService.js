@@ -84,3 +84,20 @@ export const getProjectMembersService = async (projectId, page = 1, limit = 100)
     throw error;
   }
 };
+
+/**
+ * Delete a project permanently from backend database
+ * Calls DELETE /projects/:projectId
+ * @param {string} projectId
+ * @returns {Promise<{ success: boolean, message: string }>}
+ */
+export const deleteProjectService = async (projectId) => {
+  try {
+    const response = await API.delete(`/projects/${projectId}`);
+    return response.data;
+  } catch (error) {
+    console.error("Delete project API error:", error);
+    throw error;
+  }
+};
+
