@@ -36,11 +36,24 @@ export const UserManagement = () => {
   const [selectedUserForPerms, setSelectedUserForPerms] = useState(null);
 
   const displayedUsers = useMemo(() => {
-    return users.filter(
-      (u) =>
+    let deletedEmails = [];
+    let deletedIds = [];
+    try {
+      deletedEmails = JSON.parse(localStorage.getItem('kt_dms_deleted_user_emails') || '[]').map((e) => String(e).toLowerCase());
+      deletedIds = JSON.parse(localStorage.getItem('kt_dms_deleted_user_ids') || '[]').map((id) => String(id));
+    } catch {}
+
+    return users.filter((u) => {
+      const email = (u.email || '').toLowerCase();
+      const uid = String(u.id);
+      if (email && deletedEmails.includes(email)) return false;
+      if (uid && deletedIds.includes(uid)) return false;
+
+      return (
         u.role !== 'Admin' ||
         u.email?.toLowerCase() === currentUser.email?.toLowerCase()
-    );
+      );
+    });
   }, [users, currentUser]);
 
   const { activeCount, adminCount } = useMemo(() => {

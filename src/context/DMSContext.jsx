@@ -26,6 +26,13 @@ export const DMSProvider = ({ children }) => {
     const currentAdminEmail = (localStorage.getItem('admin-email') || 'admin1@gmail.com').toLowerCase();
     const currentAdminToken = localStorage.getItem('admin-token');
 
+    let deletedUserEmails = [];
+    let deletedUserIds = [];
+    try {
+      deletedUserEmails = JSON.parse(localStorage.getItem('kt_dms_deleted_user_emails') || '[]').map((e) => String(e).toLowerCase());
+      deletedUserIds = JSON.parse(localStorage.getItem('kt_dms_deleted_user_ids') || '[]').map((id) => String(id));
+    } catch {}
+
     const emailPrefix = currentAdminEmail.split('@')[0];
     const displayName = emailPrefix.charAt(0).toUpperCase() + emailPrefix.slice(1);
     const activeAdmin = {
@@ -52,7 +59,12 @@ export const DMSProvider = ({ children }) => {
       try {
         const parsed = JSON.parse(saved);
         const membersOnly = parsed.filter(
-          (u) => u.role !== 'Admin' && u.email && u.email.toLowerCase() !== currentAdminEmail
+          (u) =>
+            u.role !== 'Admin' &&
+            u.email &&
+            u.email.toLowerCase() !== currentAdminEmail &&
+            !deletedUserEmails.includes(u.email.toLowerCase()) &&
+            !deletedUserIds.includes(String(u.id))
         );
         return [activeAdmin, ...membersOnly];
       } catch {
@@ -232,6 +244,16 @@ export const DMSProvider = ({ children }) => {
           deletedProjectIds = [];
         }
 
+        let deletedUserEmails = [];
+        let deletedUserIds = [];
+        try {
+          deletedUserEmails = JSON.parse(localStorage.getItem('kt_dms_deleted_user_emails') || '[]').map((e) => String(e).toLowerCase());
+          deletedUserIds = JSON.parse(localStorage.getItem('kt_dms_deleted_user_ids') || '[]').map((id) => String(id));
+        } catch {
+          deletedUserEmails = [];
+          deletedUserIds = [];
+        }
+
         const validBackendProjects = res.data.filter((bp) => !deletedProjectIds.includes(bp._id));
 
         // Read locally cached projects to preserve assigned members and prevent wiping them out
@@ -306,21 +328,32 @@ export const DMSProvider = ({ children }) => {
               }
             }
 
+            // Filter out any deleted members
+            finalProjMembers = finalProjMembers.filter((m) => {
+              const email = (m.email || '').toLowerCase();
+              const uid = String(m.userId);
+              if (email && deletedUserEmails.includes(email)) return false;
+              if (uid && deletedUserIds.includes(uid)) return false;
+              return true;
+            });
+
             // If project is "Node" or has 0 members due to creation bug, restore members from users
             if (bp.name === 'Node' && (!finalProjMembers || finalProjMembers.length <= 1)) {
               if (localUsersList.length > 0) {
-                finalProjMembers = localUsersList.map((u) => ({
-                  userId: u.id,
-                  name: u.name,
-                  email: u.email,
-                  permissions: {
-                    canView: true,
-                    canUpload: true,
-                    canEdit: u.role === 'Admin',
-                    canDelete: u.role === 'Admin',
-                    canDownload: true,
-                  },
-                }));
+                finalProjMembers = localUsersList
+                  .filter((u) => !deletedUserEmails.includes((u.email || '').toLowerCase()) && !deletedUserIds.includes(String(u.id)))
+                  .map((u) => ({
+                    userId: u.id,
+                    name: u.name,
+                    email: u.email,
+                    permissions: {
+                      canView: true,
+                      canUpload: true,
+                      canEdit: u.role === 'Admin',
+                      canDelete: u.role === 'Admin',
+                      canDownload: true,
+                    },
+                  }));
               }
             }
 
@@ -454,6 +487,9 @@ export const DMSProvider = ({ children }) => {
             p.members.forEach((m) => {
               if (m.email) {
                 const emailKey = m.email.toLowerCase();
+                if (deletedUserEmails.includes(emailKey) || (m.userId && deletedUserIds.includes(String(m.userId)))) {
+                  return;
+                }
                 const existing = userMap.get(emailKey);
                 const realMemberName =
                   m.name && m.name !== 'Pending Registration'
@@ -494,6 +530,9 @@ export const DMSProvider = ({ children }) => {
               const parsedInvs = JSON.parse(savedInvs);
               parsedInvs.forEach((inv) => {
                 const invEmail = inv.email?.toLowerCase();
+                if (invEmail && deletedUserEmails.includes(invEmail)) {
+                  return;
+                }
                 if (invEmail && userMap.has(invEmail)) {
                   inv.status = 'accepted';
                   return;
@@ -1327,6 +1366,13 @@ export const DMSProvider = ({ children }) => {
       addToast('Please enter a valid email address.', 'error');
       return { success: false, error: 'Email is required' };
     }
+
+    // If email was previously marked as deleted, clear it so they can be re-invited
+    try {
+      const deletedEmails = JSON.parse(localStorage.getItem('kt_dms_deleted_user_emails') || '[]');
+      const updated = deletedEmails.filter((e) => String(e).toLowerCase() !== cleanEmail);
+      localStorage.setItem('kt_dms_deleted_user_emails', JSON.stringify(updated));
+    } catch {}
 
     const existingUser = users.find((u) => u.email.toLowerCase() === cleanEmail);
     if (existingUser && existingUser.status === 'active') {
@@ -2170,21 +2216,62 @@ export const DMSProvider = ({ children }) => {
       addToast('Only Administrators can remove users.', 'error');
       return false;
     }
-    const target = users.find((u) => u.id === userId);
+    const target = users.find((u) => u.id === userId || (u.email && String(u.email).toLowerCase() === String(userId).toLowerCase()));
     if (!target) return false;
     if (target.role === 'Admin') {
       addToast('Cannot remove Administrator account.', 'warning');
       return false;
     }
 
-    setUsers((prev) => prev.filter((u) => u.id !== userId));
-    setInvitations((prev) => prev.filter((i) => i.userId !== userId && i.email !== target.email));
-    setProjects((prev) =>
-      prev.map((p) => ({
+    const targetEmail = (target.email || '').toLowerCase();
+    const targetId = String(target.id);
+
+    // 1. Add to persistent deleted users list in localStorage
+    try {
+      const deletedEmails = JSON.parse(localStorage.getItem('kt_dms_deleted_user_emails') || '[]');
+      if (targetEmail && !deletedEmails.includes(targetEmail)) {
+        deletedEmails.push(targetEmail);
+        localStorage.setItem('kt_dms_deleted_user_emails', JSON.stringify(deletedEmails));
+      }
+
+      const deletedIds = JSON.parse(localStorage.getItem('kt_dms_deleted_user_ids') || '[]');
+      if (targetId && !deletedIds.includes(targetId)) {
+        deletedIds.push(targetId);
+        localStorage.setItem('kt_dms_deleted_user_ids', JSON.stringify(deletedIds));
+      }
+    } catch (e) {
+      console.warn('Failed to save deleted user lists to localStorage:', e);
+    }
+
+    // 2. Remove user from users state and update localStorage immediately
+    setUsers((prev) => {
+      const updated = prev.filter(
+        (u) => u.id !== userId && String(u.id) !== targetId && (!targetEmail || (u.email || '').toLowerCase() !== targetEmail)
+      );
+      localStorage.setItem('kt_dms_users', JSON.stringify(updated));
+      return updated;
+    });
+
+    // 3. Remove from invitations state and localStorage
+    setInvitations((prev) => {
+      const updated = prev.filter(
+        (i) => i.userId !== userId && (!targetEmail || (i.email || '').toLowerCase() !== targetEmail)
+      );
+      localStorage.setItem('kt_dms_invitations', JSON.stringify(updated));
+      return updated;
+    });
+
+    // 4. Remove member from all projects in state and localStorage
+    setProjects((prev) => {
+      const updated = prev.map((p) => ({
         ...p,
-        members: (p.members || []).filter((m) => m.userId !== userId),
-      }))
-    );
+        members: (p.members || []).filter(
+          (m) => m.userId !== userId && String(m.userId) !== targetId && (!targetEmail || (m.email || '').toLowerCase() !== targetEmail)
+        ),
+      }));
+      localStorage.setItem('kt_dms_projects', JSON.stringify(updated));
+      return updated;
+    });
 
     recordAuditLog(
       'USER_DELETE',
