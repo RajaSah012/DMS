@@ -94,8 +94,14 @@ export const ProjectGrid = ({ onOpenCreateProject, onOpenManageProject }) => {
             const perms = getProjectPermissions(project.id);
 
             const memberUsers = (project.members || [])
-              .map((m) => users.find((u) => u.id === m.userId))
+              .map((m) => users.find((u) => u.id === m.userId || (m.email && u.email?.toLowerCase() === m.email?.toLowerCase())))
               .filter(Boolean);
+
+            const memberCount = Math.max(
+              Array.isArray(project.members) ? project.members.length : 0,
+              memberUsers.length,
+              1
+            );
 
             return (
               <div
@@ -145,7 +151,7 @@ export const ProjectGrid = ({ onOpenCreateProject, onOpenManageProject }) => {
                 <div className="pt-4 mt-3 border-t border-slate-100 flex items-center justify-between">
                   <div className="flex items-center gap-1.5 text-[11px] font-semibold text-slate-500 bg-slate-50 px-2 py-1 rounded-lg border border-slate-100">
                     <Users className="w-3.5 h-3.5 text-slate-400" />
-                    <span>{memberUsers.length} {memberUsers.length === 1 ? 'member' : 'members'}</span>
+                    <span>{memberCount} {memberCount === 1 ? 'member' : 'members'}</span>
                   </div>
 
                   <div className="flex items-center gap-1 text-[11px] font-semibold text-slate-500 bg-slate-50 px-2 py-1 rounded-lg border border-slate-100">

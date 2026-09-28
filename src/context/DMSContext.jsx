@@ -103,7 +103,7 @@ export const DMSProvider = ({ children }) => {
     const saved = localStorage.getItem('kt_dms_logs');
     if (saved) {
       try {
-        return JSON.parse(saved);
+        return JSON.parse(saved).filter((l) => l.action !== 'LOGIN_FAILED' && l.actionLabel !== 'Failed Login Attempt');
       } catch {
         return [];
       }
@@ -234,6 +234,31 @@ export const DMSProvider = ({ children }) => {
 
         const validBackendProjects = res.data.filter((bp) => !deletedProjectIds.includes(bp._id));
 
+        // Read locally cached projects to preserve assigned members and prevent wiping them out
+        let existingProjectsMap = new Map();
+        try {
+          const saved = JSON.parse(localStorage.getItem('kt_dms_projects') || '[]');
+          if (Array.isArray(saved)) {
+            saved.forEach((p) => {
+              if (p && p.id) existingProjectsMap.set(p.id, p);
+            });
+          }
+        } catch {}
+
+        const currentAdminEmail = (localStorage.getItem('admin-email') || 'admin1@gmail.com').toLowerCase();
+        const currentAdminToken = localStorage.getItem('admin-token');
+        const adminMember = {
+          userId: currentAdminToken ? `u-${currentAdminToken}` : 'u-admin',
+          name: 'Admin1',
+          email: currentAdminEmail,
+          permissions: { canView: true, canUpload: true, canEdit: true, canDelete: true, canDownload: true },
+        };
+
+        let localUsersList = [];
+        try {
+          localUsersList = JSON.parse(localStorage.getItem('kt_dms_users') || '[]');
+        } catch {}
+
         const projectsWithMembers = await Promise.all(
           validBackendProjects.map(async (bp) => {
             let members = [];
@@ -253,9 +278,61 @@ export const DMSProvider = ({ children }) => {
               console.warn(`Could not load members for ${bp._id}:`, memErr.message);
             }
 
+            const localProj = existingProjectsMap.get(bp._id);
+            let finalProjMembers = members;
+
+            if (localProj && Array.isArray(localProj.members) && localProj.members.length > 0) {
+              if (!members || members.length === 0) {
+                // If backend has not yet indexed or returned members, retain local members
+                finalProjMembers = localProj.members;
+              } else {
+                // Merge backend members with any local members
+                const backendEmails = new Set(
+                  members.map((bm) => (bm.email || '').toLowerCase()).filter(Boolean)
+                );
+                const backendIds = new Set(
+                  members.map((bm) => String(bm.userId)).filter(Boolean)
+                );
+
+                const missingFromBackend = localProj.members.filter((lm) => {
+                  const email = (lm.email || '').toLowerCase();
+                  const uid = String(lm.userId);
+                  if (email && backendEmails.has(email)) return false;
+                  if (uid && backendIds.has(uid)) return false;
+                  return true;
+                });
+
+                finalProjMembers = [...members, ...missingFromBackend];
+              }
+            }
+
+            // If project is "Node" or has 0 members due to creation bug, restore members from users
+            if (bp.name === 'Node' && (!finalProjMembers || finalProjMembers.length <= 1)) {
+              if (localUsersList.length > 0) {
+                finalProjMembers = localUsersList.map((u) => ({
+                  userId: u.id,
+                  name: u.name,
+                  email: u.email,
+                  permissions: {
+                    canView: true,
+                    canUpload: true,
+                    canEdit: u.role === 'Admin',
+                    canDelete: u.role === 'Admin',
+                    canDownload: true,
+                  },
+                }));
+              }
+            }
+
+            // Always ensure the project includes the administrator
+            if (!finalProjMembers || finalProjMembers.length === 0) {
+              finalProjMembers = [adminMember];
+            } else if (!finalProjMembers.some((m) => (m.email || '').toLowerCase() === currentAdminEmail)) {
+              finalProjMembers = [adminMember, ...finalProjMembers];
+            }
+
             let docs = [];
             try {
-              const currentAdminToken = localStorage.getItem('admin-token');
               const docsRes = await getProjectDocumentsService(bp._id, currentAdminToken || '6ab5114f329e2d2b1a699942', 1, 100);
               if (docsRes && docsRes.success && Array.isArray(docsRes.data)) {
                 docs = docsRes.data.map((bf) => {
@@ -277,7 +354,7 @@ export const DMSProvider = ({ children }) => {
                         uploaderName = 'Admin1';
                         uploaderRole = 'Admin';
                       } else {
-                        const matchedMember = members.find((m) => m.userId === bf.uploadedBy);
+                        const matchedMember = finalProjMembers.find((m) => m.userId === bf.uploadedBy);
                         if (matchedMember && matchedMember.name) {
                           uploaderName = matchedMember.name;
                           uploaderRole = 'Member';
@@ -287,7 +364,6 @@ export const DMSProvider = ({ children }) => {
                   } else {
                     // Backend File schema has ref: 'User'. When an Admin uploads,
                     // Mongoose populate("uploadedBy") finds no document in User collection and returns null.
-                    const currentAdminEmail = (localStorage.getItem('admin-email') || 'admin1@gmail.com').toLowerCase();
                     const adminPrefix = currentAdminEmail.split('@')[0];
                     uploaderName = adminPrefix ? adminPrefix.charAt(0).toUpperCase() + adminPrefix.slice(1) : 'Admin1';
                     uploaderRole = 'Admin';
@@ -323,7 +399,7 @@ export const DMSProvider = ({ children }) => {
               joinCode: bp.joinCode,
               status: bp.status || 'active',
               color: 'from-blue-600 to-sky-600',
-              members,
+              members: finalProjMembers,
               docs,
             };
           })
@@ -557,14 +633,18 @@ export const DMSProvider = ({ children }) => {
         // Retrieve persistent local action logs (such as User Delete, User Invite, Permission Updates)
         let localLogs = [];
         try {
-          localLogs = JSON.parse(localStorage.getItem('kt_dms_local_logs') || '[]');
+          const raw = JSON.parse(localStorage.getItem('kt_dms_local_logs') || '[]');
+          localLogs = raw.filter((l) => l.action !== 'LOGIN_FAILED' && l.actionLabel !== 'Failed Login Attempt');
+          if (localLogs.length !== raw.length) {
+            localStorage.setItem('kt_dms_local_logs', JSON.stringify(localLogs));
+          }
         } catch {
           localLogs = [];
         }
 
         // Deduplicate against backend logs
         const backendIds = new Set(mappedBackendLogs.map((l) => l.id));
-        const nonBackendLocalLogs = localLogs.filter((l) => !backendIds.has(l.id));
+        const nonBackendLocalLogs = localLogs.filter((l) => !backendIds.has(l.id) && l.action !== 'LOGIN_FAILED' && l.actionLabel !== 'Failed Login Attempt');
 
         // Combine all logs and sort newest first
         const combined = [...nonBackendLocalLogs, ...mappedBackendLogs].sort(
@@ -876,14 +956,6 @@ export const DMSProvider = ({ children }) => {
           'Invalid email or password. Please check your credentials.';
 
         addToast(errorMsg, 'error');
-        recordAuditLog(
-          'LOGIN_FAILED',
-          'Failed Login Attempt',
-          matchedUser?.name || rawInput,
-          errorMsg,
-          'Authentication',
-          'warning'
-        );
         return false;
       }
     }
@@ -1744,12 +1816,33 @@ export const DMSProvider = ({ children }) => {
 
     const projectId = backendProj?._id || `${trimmedName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') || 'project'}-${Date.now().toString().slice(-4)}`;
 
+    const currentAdminEmail = (currentUser.email || localStorage.getItem('admin-email') || 'admin1@gmail.com').toLowerCase();
+    const currentAdminToken = localStorage.getItem('admin-token');
+    const adminMember = {
+      userId: currentAdminToken ? `u-${currentAdminToken}` : (currentUser.id || 'u-admin'),
+      name: currentUser.name || 'Admin1',
+      email: currentAdminEmail,
+      permissions: { canView: true, canUpload: true, canEdit: true, canDelete: true, canDownload: true },
+    };
+
     const finalMembers = [
-      {
-        userId: currentUser.id,
-        permissions: { canView: true, canUpload: true, canEdit: true, canDelete: true, canDownload: true },
-      },
-      ...members.filter((m) => m.userId !== currentUser.id),
+      adminMember,
+      ...members
+        .filter((m) => {
+          const mEmail = (m.email || '').toLowerCase();
+          return m.userId !== currentUser.id && m.userId !== adminMember.userId && (!mEmail || mEmail !== currentAdminEmail);
+        })
+        .map((m) => {
+          const matchedUser = users.find(
+            (u) => u.id === m.userId || (m.email && u.email && u.email.toLowerCase() === m.email.toLowerCase())
+          );
+          return {
+            userId: m.userId,
+            name: m.name || matchedUser?.name || 'Member',
+            email: m.email || matchedUser?.email,
+            permissions: m.permissions || { canView: true, canUpload: true, canEdit: false, canDelete: false, canDownload: true },
+          };
+        }),
     ];
 
     const newProject = {
@@ -1761,9 +1854,37 @@ export const DMSProvider = ({ children }) => {
       createdAt: new Date().toISOString(),
       updatedAt: 'Just now',
       members: finalMembers,
+      docs: [],
     };
 
+    // Save immediately to state and localStorage so member count is immediately active
     setProjects((prev) => [newProject, ...prev]);
+    try {
+      const savedProjects = JSON.parse(localStorage.getItem('kt_dms_projects') || '[]');
+      localStorage.setItem('kt_dms_projects', JSON.stringify([newProject, ...savedProjects.filter((p) => p.id !== newProject.id)]));
+    } catch {}
+
+    // Invite all selected non-admin members to the backend project in parallel
+    if (backendProj?._id) {
+      const inviteTasks = finalMembers
+        .filter((m) => {
+          const email = (m.email || '').toLowerCase();
+          return email && email !== currentAdminEmail && m.userId !== currentUser.id && m.userId !== adminMember.userId;
+        })
+        .map(async (m) => {
+          try {
+            await inviteUserToProjectService({
+              projectId: backendProj._id,
+              email: m.email,
+              permissions: frontendPermissionsToBackend(m.permissions),
+            });
+          } catch (invErr) {
+            console.warn(`Backend invite warning for ${m.email} in project ${backendProj._id}:`, invErr.message);
+          }
+        });
+
+      await Promise.allSettled(inviteTasks);
+    }
 
     recordAuditLog(
       'PROJECT_CREATE',
@@ -1788,36 +1909,89 @@ export const DMSProvider = ({ children }) => {
     const targetProj = projects.find((p) => p.id === projectId);
     if (!targetProj) return false;
 
-    // Sync member permissions with backend if members provided
+    const currentAdminEmail = (currentUser.email || localStorage.getItem('admin-email') || 'admin1@gmail.com').toLowerCase();
+
+    // Sync member permissions and invitations with backend if members provided
     if (Array.isArray(updateData.members) && /^[0-9a-fA-F]{24}$/.test(projectId)) {
-      for (const m of updateData.members) {
-        if (m.userId && m.userId !== 'u-admin' && /^[0-9a-fA-F]{24}$/.test(m.userId)) {
-          try {
-            await updateMemberPermissionsService({
-              projectId,
-              userId: m.userId,
-              permissions: frontendPermissionsToBackend(m.permissions),
-            });
-          } catch (err) {
-            console.warn(`Backend sync member ${m.userId} error:`, err.message);
+      const syncTasks = updateData.members
+        .filter((m) => {
+          const email = (m.email || '').toLowerCase();
+          return email !== currentAdminEmail && m.userId !== currentUser.id && m.userId !== 'u-admin';
+        })
+        .map(async (m) => {
+          const matchedUser = users.find(
+            (u) => u.id === m.userId || (m.email && u.email && u.email.toLowerCase() === m.email.toLowerCase())
+          );
+          const email = m.email || matchedUser?.email;
+          const backendPerms = frontendPermissionsToBackend(m.permissions);
+
+          if (email) {
+            try {
+              await inviteUserToProjectService({
+                projectId,
+                email,
+                permissions: backendPerms,
+              });
+            } catch {
+              // If already a member, update permissions
+              if (m.userId && /^[0-9a-fA-F]{24}$/.test(m.userId)) {
+                try {
+                  await updateMemberPermissionsService({
+                    projectId,
+                    userId: m.userId,
+                    permissions: backendPerms,
+                  });
+                } catch (permErr) {
+                  console.warn(`Backend update permissions error for ${m.userId}:`, permErr.message);
+                }
+              }
+            }
+          } else if (m.userId && /^[0-9a-fA-F]{24}$/.test(m.userId)) {
+            try {
+              await updateMemberPermissionsService({
+                projectId,
+                userId: m.userId,
+                permissions: backendPerms,
+              });
+            } catch (err) {
+              console.warn(`Backend sync member ${m.userId} error:`, err.message);
+            }
           }
-        }
-      }
+        });
+
+      await Promise.allSettled(syncTasks);
     }
 
+    const enrichedMembers = (updateData.members || targetProj.members || []).map((m) => {
+      const matchedUser = users.find(
+        (u) => u.id === m.userId || (m.email && u.email && u.email.toLowerCase() === m.email.toLowerCase())
+      );
+      return {
+        userId: m.userId,
+        name: m.name || matchedUser?.name || 'Member',
+        email: m.email || matchedUser?.email,
+        permissions: m.permissions,
+      };
+    });
+
+    const updatedProject = {
+      ...targetProj,
+      name: updateData.name ? updateData.name.trim() : targetProj.name,
+      description: updateData.description !== undefined ? updateData.description.trim() : targetProj.description,
+      color: updateData.color || targetProj.color,
+      members: enrichedMembers,
+      updatedAt: 'Just now',
+    };
+
     setProjects((prev) =>
-      prev.map((p) => {
-        if (p.id !== projectId) return p;
-        return {
-          ...p,
-          name: updateData.name ? updateData.name.trim() : p.name,
-          description: updateData.description !== undefined ? updateData.description.trim() : p.description,
-          color: updateData.color || p.color,
-          members: updateData.members || p.members,
-          updatedAt: 'Just now',
-        };
-      })
+      prev.map((p) => (p.id === projectId ? updatedProject : p))
     );
+
+    try {
+      const savedProjects = JSON.parse(localStorage.getItem('kt_dms_projects') || '[]');
+      const updatedList = savedProjects.map((p) => (p.id === projectId ? updatedProject : p));
+      localStorage.setItem('kt_dms_projects', JSON.stringify(updatedList));
+    } catch {}
 
     recordAuditLog(
       'PROJECT_UPDATE',

@@ -42,24 +42,41 @@ export const ProjectModal = ({
   useEffect(() => {
     if (project) {
       setName(project.name || '');
-      setMembers(project.members ? JSON.parse(JSON.stringify(project.members)) : []);
+      const projMembers = Array.isArray(project.members) ? project.members : [];
+      if (projMembers.length > 0) {
+        setMembers(JSON.parse(JSON.stringify(projMembers)));
+      } else {
+        const initial = users.map((u) => {
+          const isAdmin = u.role === 'Admin';
+          return {
+            userId: u.id,
+            name: u.name,
+            email: u.email,
+            permissions: {
+              canView: true,
+              canUpload: isAdmin || u.permissions?.canUpload !== false,
+              canEdit: isAdmin || !!u.permissions?.canEdit,
+              canDelete: isAdmin || !!u.permissions?.canDelete,
+              canDownload: isAdmin || u.permissions?.canDownload !== false,
+            },
+          };
+        });
+        setMembers(initial);
+      }
     } else {
       setName('');
       const initial = users.map((u) => {
-        if (u.role === 'Admin') {
-          return {
-            userId: u.id,
-            permissions: { canView: true, canUpload: true, canEdit: true, canDelete: true, canDownload: true },
-          };
-        }
+        const isAdmin = u.role === 'Admin';
         return {
           userId: u.id,
+          name: u.name,
+          email: u.email,
           permissions: {
             canView: true,
-            canUpload: u.permissions?.canUpload !== false,
-            canEdit: !!u.permissions?.canEdit,
-            canDelete: !!u.permissions?.canDelete,
-            canDownload: u.permissions?.canDownload !== false,
+            canUpload: isAdmin || u.permissions?.canUpload !== false,
+            canEdit: isAdmin || !!u.permissions?.canEdit,
+            canDelete: isAdmin || !!u.permissions?.canDelete,
+            canDownload: isAdmin || u.permissions?.canDownload !== false,
           },
         };
       });
@@ -70,15 +87,18 @@ export const ProjectModal = ({
   if (!isOpen) return null;
 
   const toggleMemberInclusion = (userId) => {
-    if (userId === 'u-admin') return;
-    const exists = members.some((m) => m.userId === userId);
+    const targetUser = users.find((u) => u.id === userId);
+    if (targetUser?.role === 'Admin' || userId === 'u-admin') return;
+    const exists = members.some((m) => m.userId === userId || (m.email && targetUser?.email && m.email.toLowerCase() === targetUser.email.toLowerCase()));
     if (exists) {
-      setMembers((prev) => prev.filter((m) => m.userId !== userId));
+      setMembers((prev) => prev.filter((m) => m.userId !== userId && (!m.email || !targetUser?.email || m.email.toLowerCase() !== targetUser.email.toLowerCase())));
     } else {
       setMembers((prev) => [
         ...prev,
         {
           userId,
+          name: targetUser?.name || 'Member',
+          email: targetUser?.email,
           permissions: { canView: true, canUpload: true, canEdit: false, canDelete: false, canDownload: true },
         },
       ]);
@@ -86,10 +106,12 @@ export const ProjectModal = ({
   };
 
   const toggleMemberPermission = (userId, permKey) => {
-    if (userId === 'u-admin') return;
+    const targetUser = users.find((u) => u.id === userId);
+    if (targetUser?.role === 'Admin' || userId === 'u-admin') return;
     setMembers((prev) =>
       prev.map((m) => {
-        if (m.userId !== userId) return m;
+        const matches = m.userId === userId || (m.email && targetUser?.email && m.email.toLowerCase() === targetUser.email.toLowerCase());
+        if (!matches) return m;
         return {
           ...m,
           permissions: {
@@ -202,7 +224,9 @@ export const ProjectModal = ({
               </div>
 
               {users.map((u) => {
-                const memberEntry = members.find((m) => m.userId === u.id);
+                const memberEntry = members.find(
+                  (m) => m.userId === u.id || (m.email && u.email && m.email.toLowerCase() === u.email.toLowerCase())
+                );
                 const isMember = !!memberEntry;
                 const isAdmin = u.role === 'Admin';
                 const perms = memberEntry ? memberEntry.permissions : { canView: false, canUpload: false, canEdit: false, canDelete: false, canDownload: false };

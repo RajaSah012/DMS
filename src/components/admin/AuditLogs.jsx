@@ -66,6 +66,11 @@ export const AuditLogs = () => {
       : null;
 
     return logs.filter((log) => {
+      // Exclude local failed login attempts
+      if (log.action === 'LOGIN_FAILED' || log.actionLabel === 'Failed Login Attempt') {
+        return false;
+      }
+
       // 1. Filter by Project
       if (selectedProjectFilter !== 'all' && selectedProjObj) {
         const pId = selectedProjectFilter;
