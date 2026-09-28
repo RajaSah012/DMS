@@ -11,6 +11,7 @@ import { useDMS } from '../context/DMSContext';
 
 export const MobileBottomNav = ({ onOpenUpload }) => {
   const { 
+    currentUser,
     activeTab, 
     setActiveTab, 
     setSelectedProject, 
@@ -71,45 +72,49 @@ export const MobileBottomNav = ({ onOpenUpload }) => {
           </button>
         </div>
 
-        <button
-          onClick={() => handleTabClick('users', canManageUsers)}
-          className={`flex flex-col items-center justify-center flex-1 py-1 transition-all cursor-pointer ${
-            activeTab === 'users'
-              ? 'text-[#00A3E0] font-bold'
-              : 'text-slate-400 hover:text-slate-600 font-medium'
-          }`}
-        >
-          <div className="relative">
-            <Users className="w-5 h-5" />
-            {!canManageUsers && (
-              <Lock className="w-2.5 h-2.5 text-slate-400 absolute -top-1 -right-1" />
-            )}
-            {activeTab === 'users' && (
-              <span className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-1 h-1 rounded-full bg-[#00A3E0]"></span>
-            )}
-          </div>
-          <span className="text-[10px] mt-1 tracking-tight">Users</span>
-        </button>
+        {currentUser?.role === 'Admin' && (
+          <>
+            <button
+              onClick={() => handleTabClick('users', canManageUsers)}
+              className={`flex flex-col items-center justify-center flex-1 py-1 transition-all cursor-pointer ${
+                activeTab === 'users'
+                  ? 'text-[#00A3E0] font-bold'
+                  : 'text-slate-400 hover:text-slate-600 font-medium'
+              }`}
+            >
+              <div className="relative">
+                <Users className="w-5 h-5" />
+                {!canManageUsers && (
+                  <Lock className="w-2.5 h-2.5 text-slate-400 absolute -top-1 -right-1" />
+                )}
+                {activeTab === 'users' && (
+                  <span className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-1 h-1 rounded-full bg-[#00A3E0]"></span>
+                )}
+              </div>
+              <span className="text-[10px] mt-1 tracking-tight">Users</span>
+            </button>
 
-        <button
-          onClick={() => handleTabClick('logs', canViewLogs)}
-          className={`flex flex-col items-center justify-center flex-1 py-1 transition-all cursor-pointer ${
-            activeTab === 'logs'
-              ? 'text-[#00A3E0] font-bold'
-              : 'text-slate-400 hover:text-slate-600 font-medium'
-          }`}
-        >
-          <div className="relative">
-            <FileClock className="w-5 h-5" />
-            {!canViewLogs && (
-              <Lock className="w-2.5 h-2.5 text-slate-400 absolute -top-1 -right-1" />
-            )}
-            {activeTab === 'logs' && (
-              <span className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-1 h-1 rounded-full bg-[#00A3E0]"></span>
-            )}
-          </div>
-          <span className="text-[10px] mt-1 tracking-tight">Logs</span>
-        </button>
+            <button
+              onClick={() => handleTabClick('logs', canViewLogs)}
+              className={`flex flex-col items-center justify-center flex-1 py-1 transition-all cursor-pointer ${
+                activeTab === 'logs'
+                  ? 'text-[#00A3E0] font-bold'
+                  : 'text-slate-400 hover:text-slate-600 font-medium'
+              }`}
+            >
+              <div className="relative">
+                <FileClock className="w-5 h-5" />
+                {!canViewLogs && (
+                  <Lock className="w-2.5 h-2.5 text-slate-400 absolute -top-1 -right-1" />
+                )}
+                {activeTab === 'logs' && (
+                  <span className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-1 h-1 rounded-full bg-[#00A3E0]"></span>
+                )}
+              </div>
+              <span className="text-[10px] mt-1 tracking-tight">Logs</span>
+            </button>
+          </>
+        )}
 
       </div>
     </div>

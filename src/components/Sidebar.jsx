@@ -68,53 +68,48 @@ export const Sidebar = ({
           </nav>
         </div>
 
-        <div>
-          <div className="flex items-center justify-between px-3 mb-2">
-            <p className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
+        {currentUser?.role === 'Admin' && (
+          <div>
+            <p className="px-3 text-[11px] font-bold uppercase tracking-wider text-slate-400 mb-2">
               Administration
             </p>
-            {currentUser.role === 'Admin' && (
-              <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-sky-100 text-[#0284C7]">
-                Admin Zone
-              </span>
-            )}
-          </div>
-          <nav className="space-y-1">
-            <button
-              onClick={() => handleTabClick('users', canManageUsers)}
-              className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
-                activeTab === 'users'
-                  ? 'bg-gradient-to-r from-[#00A3E0]/15 to-sky-50 text-[#0284C7] font-bold'
-                  : canManageUsers
-                  ? 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
-                  : 'text-slate-400 hover:bg-slate-50/50 cursor-not-allowed opacity-75'
-              }`}
-            >
-              <div className="flex items-center gap-3">
-                <Users className="w-4 h-4 shrink-0" />
-                <span>Users & Permissions</span>
-              </div>
-              {!canManageUsers && <Lock className="w-3 h-3 text-slate-400 shrink-0" />}
-            </button>
+            <nav className="space-y-1">
+              <button
+                onClick={() => handleTabClick('users', canManageUsers)}
+                className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
+                  activeTab === 'users'
+                    ? 'bg-gradient-to-r from-[#00A3E0]/15 to-sky-50 text-[#0284C7] font-bold'
+                    : canManageUsers
+                    ? 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
+                    : 'text-slate-400 hover:bg-slate-50/50 cursor-not-allowed opacity-75'
+                }`}
+              >
+                <div className="flex items-center gap-3">
+                  <Users className="w-4 h-4 shrink-0" />
+                  <span>Users & Permissions</span>
+                </div>
+                {!canManageUsers && <Lock className="w-3 h-3 text-slate-400 shrink-0" />}
+              </button>
 
-            <button
-              onClick={() => handleTabClick('logs', canViewLogs)}
-              className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
-                activeTab === 'logs'
-                  ? 'bg-gradient-to-r from-[#00A3E0]/15 to-sky-50 text-[#0284C7] font-bold'
-                  : canViewLogs
-                  ? 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
-                  : 'text-slate-400 hover:bg-slate-50/50 cursor-not-allowed opacity-75'
-              }`}
-            >
-              <div className="flex items-center gap-3">
-                <FileClock className="w-4 h-4 shrink-0" />
-                <span>Activity & Audit Logs</span>
-              </div>
-              {!canViewLogs && <Lock className="w-3 h-3 text-slate-400 shrink-0" />}
-            </button>
-          </nav>
-        </div>
+              <button
+                onClick={() => handleTabClick('logs', canViewLogs)}
+                className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
+                  activeTab === 'logs'
+                    ? 'bg-gradient-to-r from-[#00A3E0]/15 to-sky-50 text-[#0284C7] font-bold'
+                    : canViewLogs
+                    ? 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
+                    : 'text-slate-400 hover:bg-slate-50/50 cursor-not-allowed opacity-75'
+                }`}
+              >
+                <div className="flex items-center gap-3">
+                  <FileClock className="w-4 h-4 shrink-0" />
+                  <span>Activity & Audit Logs</span>
+                </div>
+                {!canViewLogs && <Lock className="w-3 h-3 text-slate-400 shrink-0" />}
+              </button>
+            </nav>
+          </div>
+        )}
 
       </div>
 

@@ -52,15 +52,6 @@ export const ProjectGrid = ({ onOpenCreateProject, onOpenManageProject }) => {
         </div>
 
         <div className="flex items-center gap-2 shrink-0">
-          {selectedProject && (
-            <button
-              onClick={() => setSelectedProject(null)}
-              className="text-xs font-semibold text-[#00A3E0] hover:underline cursor-pointer"
-            >
-              Show All Projects
-            </button>
-          )}
-
           {currentUser.role === 'Admin' && (
             <button
               onClick={onOpenCreateProject}

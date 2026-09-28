@@ -63,19 +63,21 @@ export const DMSProvider = ({ children }) => {
   });
 
   const [currentUserId, setCurrentUserId] = useState(() => {
-    return localStorage.getItem('kt_dms_active_user_id') || 'u-admin';
+    return localStorage.getItem('kt_dms_active_user_id') || null;
   });
 
   const [isAuthenticated, setIsAuthenticated] = useState(() => {
     const saved = localStorage.getItem('kt_dms_auth');
-    return saved !== null ? saved === 'true' : true;
+    return saved === 'true';
   });
 
   const [files, setFiles] = useState(() => {
     const saved = localStorage.getItem('kt_dms_files');
     if (saved) {
       try {
-        return JSON.parse(saved);
+        const parsed = JSON.parse(saved);
+        const deletedIds = JSON.parse(localStorage.getItem('kt_dms_deleted_project_ids') || '[]');
+        return parsed.filter((f) => !deletedIds.includes(f.projectId) && !deletedIds.includes(f.folder));
       } catch {
         return [];
       }
@@ -87,7 +89,9 @@ export const DMSProvider = ({ children }) => {
     const saved = localStorage.getItem('kt_dms_projects');
     if (saved) {
       try {
-        return JSON.parse(saved);
+        const parsed = JSON.parse(saved);
+        const deletedIds = JSON.parse(localStorage.getItem('kt_dms_deleted_project_ids') || '[]');
+        return parsed.filter((p) => !deletedIds.includes(p.id));
       } catch {
         return [];
       }
@@ -159,7 +163,11 @@ export const DMSProvider = ({ children }) => {
   }, [logs]);
 
   useEffect(() => {
-    localStorage.setItem('kt_dms_active_user_id', currentUserId);
+    if (currentUserId) {
+      localStorage.setItem('kt_dms_active_user_id', currentUserId);
+    } else {
+      localStorage.removeItem('kt_dms_active_user_id');
+    }
   }, [currentUserId]);
 
   useEffect(() => {
@@ -195,6 +203,10 @@ export const DMSProvider = ({ children }) => {
           if (['all-files', 'users', 'logs'].includes(e.newValue)) {
             setActiveTab(e.newValue);
           }
+        } else if (e.key === 'kt_dms_auth') {
+          setIsAuthenticated(e.newValue === 'true');
+        } else if (e.key === 'kt_dms_active_user_id') {
+          setCurrentUserId(e.newValue || null);
         } else if (e.key === 'kt_dms_selected_project') {
           setSelectedProject(e.newValue || null);
         }
@@ -213,8 +225,17 @@ export const DMSProvider = ({ children }) => {
     try {
       const res = await getAllProjectsService(1, 100);
       if (res && res.success && Array.isArray(res.data)) {
+        let deletedProjectIds = [];
+        try {
+          deletedProjectIds = JSON.parse(localStorage.getItem('kt_dms_deleted_project_ids') || '[]');
+        } catch {
+          deletedProjectIds = [];
+        }
+
+        const validBackendProjects = res.data.filter((bp) => !deletedProjectIds.includes(bp._id));
+
         const projectsWithMembers = await Promise.all(
-          res.data.map(async (bp) => {
+          validBackendProjects.map(async (bp) => {
             let members = [];
             try {
               const memRes = await getProjectMembersService(bp._id, 1, 100);
@@ -528,6 +549,8 @@ export const DMSProvider = ({ children }) => {
             status: 'success',
             details: detailsStr || `Activity on ${bLog.entityType}`,
             isBackendLog: true,
+            projectId: bLog.projectId?._id || bLog.projectId?.id || (typeof bLog.projectId === 'string' ? bLog.projectId : null),
+            projectName: bLog.projectId?.name || null,
           };
         });
 
@@ -625,7 +648,7 @@ export const DMSProvider = ({ children }) => {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   };
 
-  const recordAuditLog = (action, actionLabel, target, details, category = 'Document Management', status = 'success') => {
+  const recordAuditLog = (action, actionLabel, target, details, category = 'Document Management', status = 'success', projectId = null, projectName = null) => {
     const newLog = {
       id: `local-log-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
       timestamp: new Date().toISOString(),
@@ -639,6 +662,8 @@ export const DMSProvider = ({ children }) => {
       status,
       ip: '192.168.1.' + Math.floor(Math.random() * 150 + 10),
       details,
+      projectId: projectId || selectedProject || null,
+      projectName: projectName || null,
       isLocal: true,
     };
 
@@ -865,9 +890,11 @@ export const DMSProvider = ({ children }) => {
   };
 
   const logout = () => {
-    recordAuditLog('USER_LOGOUT', 'User Logged Out', currentUser.name, `User signed out of document workspace`, 'Authentication', 'info');
+    recordAuditLog('USER_LOGOUT', 'User Logged Out', currentUser?.name || 'User', `User signed out of document workspace`, 'Authentication', 'info');
     setIsAuthenticated(false);
+    setCurrentUserId(null);
     localStorage.removeItem('admin-token');
+    localStorage.removeItem('kt_dms_active_user_id');
     localStorage.setItem('kt_dms_auth', 'false');
     localStorage.removeItem('kt_dms_active_tab');
     localStorage.removeItem('kt_dms_selected_project');
@@ -1814,9 +1841,32 @@ export const DMSProvider = ({ children }) => {
     const targetProj = projects.find((p) => p.id === projectId);
     if (!targetProj) return false;
 
-    setProjects((prev) => prev.filter((p) => p.id !== projectId));
+    // Track deleted project ID persistently so backend resync on focus/reload does not restore it
+    try {
+      const deletedIds = JSON.parse(localStorage.getItem('kt_dms_deleted_project_ids') || '[]');
+      if (!deletedIds.includes(projectId)) {
+        deletedIds.push(projectId);
+        localStorage.setItem('kt_dms_deleted_project_ids', JSON.stringify(deletedIds));
+      }
+    } catch {
+      // ignore
+    }
+
+    setProjects((prev) => {
+      const updated = prev.filter((p) => p.id !== projectId);
+      localStorage.setItem('kt_dms_projects', JSON.stringify(updated));
+      return updated;
+    });
+
+    setFiles((prev) => {
+      const updated = prev.filter((f) => f.projectId !== projectId && f.folder !== projectId);
+      localStorage.setItem('kt_dms_files', JSON.stringify(updated));
+      return updated;
+    });
+
     if (selectedProject === projectId) {
       setSelectedProject(null);
+      localStorage.removeItem('kt_dms_selected_project');
     }
 
     recordAuditLog(
