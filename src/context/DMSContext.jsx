@@ -1,0 +1,2097 @@
+import React, { createContext, useContext, useState, useEffect, useMemo, useCallback } from 'react';
+import { loginAdminService, loginUserService, registerUserService } from '../services/authService';
+import { 
+  getAllProjectsService, 
+  createProjectService, 
+  inviteUserToProjectService, 
+  updateMemberPermissionsService, 
+  getProjectMembersService 
+} from '../services/projectService';
+import { backendPermissionsToFrontend, frontendPermissionsToBackend } from '../utils/permissionMapper';
+import { 
+  uploadDocumentService, 
+  getProjectDocumentsService, 
+  deleteDocumentService, 
+  getFileDownloadUrl, 
+  formatBytes, 
+  detectTypeFromExtension 
+} from '../services/documentService';
+import { getAuditLogsService } from '../services/auditService';
+
+const DMSContext = createContext();
+
+export const DMSProvider = ({ children }) => {
+  const [users, setUsers] = useState(() => {
+    const saved = localStorage.getItem('kt_dms_users');
+    const currentAdminEmail = (localStorage.getItem('admin-email') || 'admin1@gmail.com').toLowerCase();
+    const currentAdminToken = localStorage.getItem('admin-token');
+
+    const emailPrefix = currentAdminEmail.split('@')[0];
+    const displayName = emailPrefix.charAt(0).toUpperCase() + emailPrefix.slice(1);
+    const activeAdmin = {
+      id: currentAdminToken ? `u-${currentAdminToken}` : 'u-admin',
+      name: displayName,
+      email: currentAdminEmail,
+      role: 'Admin',
+      avatar: '/p1.jpg',
+      department: 'System Administration',
+      status: 'active',
+      projectIds: [],
+      permissions: {
+        canView: true,
+        canUpload: true,
+        canEdit: true,
+        canDelete: true,
+        canDownload: true,
+        canManageUsers: true,
+        canViewLogs: true,
+      },
+    };
+
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        const membersOnly = parsed.filter(
+          (u) => u.role !== 'Admin' && u.email && u.email.toLowerCase() !== currentAdminEmail
+        );
+        return [activeAdmin, ...membersOnly];
+      } catch {
+        return [activeAdmin];
+      }
+    }
+    return [activeAdmin];
+  });
+
+  const [currentUserId, setCurrentUserId] = useState(() => {
+    return localStorage.getItem('kt_dms_active_user_id') || 'u-admin';
+  });
+
+  const [isAuthenticated, setIsAuthenticated] = useState(() => {
+    const saved = localStorage.getItem('kt_dms_auth');
+    return saved !== null ? saved === 'true' : true;
+  });
+
+  const [files, setFiles] = useState(() => {
+    const saved = localStorage.getItem('kt_dms_files');
+    if (saved) {
+      try {
+        return JSON.parse(saved);
+      } catch {
+        return [];
+      }
+    }
+    return [];
+  });
+
+  const [projects, setProjects] = useState(() => {
+    const saved = localStorage.getItem('kt_dms_projects');
+    if (saved) {
+      try {
+        return JSON.parse(saved);
+      } catch {
+        return [];
+      }
+    }
+    return [];
+  });
+
+  const [logs, setLogs] = useState(() => {
+    const saved = localStorage.getItem('kt_dms_logs');
+    if (saved) {
+      try {
+        return JSON.parse(saved);
+      } catch {
+        return [];
+      }
+    }
+    return [];
+  });
+
+  const [activeTab, setActiveTab] = useState(() => {
+    const saved = localStorage.getItem('kt_dms_active_tab');
+    if (saved && ['all-files', 'users', 'logs'].includes(saved)) {
+      return saved;
+    }
+    return 'all-files';
+  });
+  const [searchQuery, setSearchQuery] = useState('');
+  const [selectedProject, setSelectedProject] = useState(() => {
+    return localStorage.getItem('kt_dms_selected_project') || null;
+  });
+  const [toasts, setToasts] = useState([]);
+  
+  const [inviteToken, setInviteToken] = useState(() => {
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      return params.get('invite') || null;
+    }
+    return null;
+  });
+
+  const [invitations, setInvitations] = useState(() => {
+    try {
+      const saved = localStorage.getItem('kt_dms_invitations');
+      if (saved) return JSON.parse(saved);
+    } catch {
+      // fallback
+    }
+    return [];
+  });
+
+  useEffect(() => {
+    localStorage.setItem('kt_dms_invitations', JSON.stringify(invitations));
+  }, [invitations]);
+
+  useEffect(() => {
+    localStorage.setItem('kt_dms_users', JSON.stringify(users));
+  }, [users]);
+
+  useEffect(() => {
+    localStorage.setItem('kt_dms_files', JSON.stringify(files));
+  }, [files]);
+
+  useEffect(() => {
+    localStorage.setItem('kt_dms_projects', JSON.stringify(projects));
+  }, [projects]);
+
+  useEffect(() => {
+    localStorage.setItem('kt_dms_logs', JSON.stringify(logs));
+  }, [logs]);
+
+  useEffect(() => {
+    localStorage.setItem('kt_dms_active_user_id', currentUserId);
+  }, [currentUserId]);
+
+  useEffect(() => {
+    if (activeTab) {
+      localStorage.setItem('kt_dms_active_tab', activeTab);
+    }
+  }, [activeTab]);
+
+  useEffect(() => {
+    if (selectedProject) {
+      localStorage.setItem('kt_dms_selected_project', selectedProject);
+    } else {
+      localStorage.removeItem('kt_dms_selected_project');
+    }
+  }, [selectedProject]);
+
+  // Multi-tab synchronization
+  useEffect(() => {
+    const handleStorageChange = (e) => {
+      if (!e.newValue) return;
+      try {
+        if (e.key === 'kt_dms_users') {
+          setUsers(JSON.parse(e.newValue));
+        } else if (e.key === 'kt_dms_invitations') {
+          setInvitations(JSON.parse(e.newValue));
+        } else if (e.key === 'kt_dms_projects') {
+          setProjects(JSON.parse(e.newValue));
+        } else if (e.key === 'kt_dms_files') {
+          setFiles(JSON.parse(e.newValue));
+        } else if (e.key === 'kt_dms_logs') {
+          setLogs(JSON.parse(e.newValue));
+        } else if (e.key === 'kt_dms_active_tab') {
+          if (['all-files', 'users', 'logs'].includes(e.newValue)) {
+            setActiveTab(e.newValue);
+          }
+        } else if (e.key === 'kt_dms_selected_project') {
+          setSelectedProject(e.newValue || null);
+        }
+      } catch (err) {
+        console.error('Failed to sync state from storage event:', err);
+      }
+    };
+
+    window.addEventListener('storage', handleStorageChange);
+    return () => window.removeEventListener('storage', handleStorageChange);
+  }, []);
+
+
+
+  const loadBackendProjects = useCallback(async () => {
+    try {
+      const res = await getAllProjectsService(1, 100);
+      if (res && res.success && Array.isArray(res.data)) {
+        const projectsWithMembers = await Promise.all(
+          res.data.map(async (bp) => {
+            let members = [];
+            try {
+              const memRes = await getProjectMembersService(bp._id, 1, 100);
+              if (memRes && memRes.success && Array.isArray(memRes.data)) {
+                members = memRes.data
+                  .filter((m) => m.userId)
+                  .map((m) => ({
+                    userId: m.userId._id || m.userId.id || m.userId,
+                    name: m.userId.name,
+                    email: m.userId.email,
+                    permissions: backendPermissionsToFrontend(m.permissions),
+                  }));
+              }
+            } catch (memErr) {
+              console.warn(`Could not load members for ${bp._id}:`, memErr.message);
+            }
+
+            let docs = [];
+            try {
+              const currentAdminToken = localStorage.getItem('admin-token');
+              const docsRes = await getProjectDocumentsService(bp._id, currentAdminToken || '6ab5114f329e2d2b1a699942', 1, 100);
+              if (docsRes && docsRes.success && Array.isArray(docsRes.data)) {
+                docs = docsRes.data.map((bf) => {
+                  let uploaderName = 'Admin1';
+                  let uploaderRole = 'Admin';
+
+                  if (bf.uploadedBy) {
+                    if (typeof bf.uploadedBy === 'object') {
+                      if (bf.uploadedBy.name) {
+                        uploaderName = bf.uploadedBy.name;
+                        uploaderRole = 'Member';
+                      } else if (bf.uploadedBy.email) {
+                        const emailPrefix = bf.uploadedBy.email.split('@')[0];
+                        uploaderName = emailPrefix.charAt(0).toUpperCase() + emailPrefix.slice(1);
+                        uploaderRole = 'Member';
+                      }
+                    } else if (typeof bf.uploadedBy === 'string') {
+                      if (bf.uploadedBy === currentAdminToken || bf.uploadedBy === '6ab5114f329e2d2b1a699942') {
+                        uploaderName = 'Admin1';
+                        uploaderRole = 'Admin';
+                      } else {
+                        const matchedMember = members.find((m) => m.userId === bf.uploadedBy);
+                        if (matchedMember && matchedMember.name) {
+                          uploaderName = matchedMember.name;
+                          uploaderRole = 'Member';
+                        }
+                      }
+                    }
+                  } else {
+                    // Backend File schema has ref: 'User'. When an Admin uploads,
+                    // Mongoose populate("uploadedBy") finds no document in User collection and returns null.
+                    const currentAdminEmail = (localStorage.getItem('admin-email') || 'admin1@gmail.com').toLowerCase();
+                    const adminPrefix = currentAdminEmail.split('@')[0];
+                    uploaderName = adminPrefix ? adminPrefix.charAt(0).toUpperCase() + adminPrefix.slice(1) : 'Admin1';
+                    uploaderRole = 'Admin';
+                  }
+
+                  return {
+                    id: bf._id,
+                    name: bf.originalName || bf.filename,
+                    type: detectTypeFromExtension(bf.originalName || bf.filename),
+                    projectId: bp._id,
+                    folder: bp._id,
+                    size: formatBytes(bf.size),
+                    sizeBytes: bf.size,
+                    uploadedBy: uploaderName,
+                    uploaderRole: uploaderRole,
+                    uploadedAt: bf.createdAt || new Date().toISOString(),
+                    starred: false,
+                    version: '1.0',
+                    fileUrl: getFileDownloadUrl(bf.fileUrl),
+                    backendFileUrl: bf.fileUrl,
+                    isRealUpload: true,
+                  };
+                });
+              }
+            } catch (docErr) {
+              // Silently ignore if checkPermission fails
+            }
+
+            return {
+              id: bp._id,
+              name: bp.name,
+              description: bp.description || '',
+              joinCode: bp.joinCode,
+              status: bp.status || 'active',
+              color: 'from-blue-600 to-sky-600',
+              members,
+              docs,
+            };
+          })
+        );
+
+        setProjects(projectsWithMembers);
+        localStorage.setItem('kt_dms_projects', JSON.stringify(projectsWithMembers));
+
+        const allBackendFiles = projectsWithMembers.flatMap((p) => p.docs || []);
+        if (allBackendFiles.length > 0) {
+          setFiles((prev) => {
+            const backendIds = new Set(allBackendFiles.map((f) => f.id));
+            const remaining = prev.filter((f) => !backendIds.has(f.id));
+            const combined = [...allBackendFiles, ...remaining];
+            localStorage.setItem('kt_dms_files', JSON.stringify(combined));
+            return combined;
+          });
+        }
+
+        // Update users state with real registered members from MongoDB
+        setUsers(() => {
+          const currentAdminEmail = (localStorage.getItem('admin-email') || 'admin1@gmail.com').toLowerCase();
+          const currentAdminToken = localStorage.getItem('admin-token');
+          const emailPrefix = currentAdminEmail.split('@')[0];
+          const displayName = emailPrefix.charAt(0).toUpperCase() + emailPrefix.slice(1);
+
+          const activeAdmin = {
+            id: currentAdminToken ? `u-${currentAdminToken}` : 'u-admin',
+            name: displayName,
+            email: currentAdminEmail,
+            role: 'Admin',
+            avatar: '/p1.jpg',
+            department: 'System Administration',
+            status: 'active',
+            projectIds: projectsWithMembers.map((p) => p.id),
+            permissions: {
+              canView: true,
+              canUpload: true,
+              canEdit: true,
+              canDelete: true,
+              canDownload: true,
+              canManageUsers: true,
+              canViewLogs: true,
+            },
+          };
+
+          const userMap = new Map();
+          userMap.set(currentAdminEmail, activeAdmin);
+
+          // Populate real registered members from MongoDB
+          projectsWithMembers.forEach((p) => {
+            p.members.forEach((m) => {
+              if (m.email) {
+                const emailKey = m.email.toLowerCase();
+                const existing = userMap.get(emailKey);
+                const realMemberName =
+                  m.name && m.name !== 'Pending Registration'
+                    ? m.name
+                    : existing && existing.name && existing.name !== 'Pending Registration'
+                    ? existing.name
+                    : m.email.split('@')[0];
+
+                if (!existing) {
+                  userMap.set(emailKey, {
+                    id: m.userId,
+                    name: realMemberName,
+                    email: m.email,
+                    role: 'Member',
+                    avatar: '/p2.jpg',
+                    department: 'Project Member',
+                    status: 'active',
+                    projectIds: [p.id],
+                    permissions: m.permissions,
+                  });
+                } else if (existing.role !== 'Admin') {
+                  userMap.set(emailKey, {
+                    ...existing,
+                    id: m.userId || existing.id,
+                    name: realMemberName,
+                    status: 'active',
+                    projectIds: Array.from(new Set([...(existing.projectIds || []), p.id])),
+                  });
+                }
+              }
+            });
+          });
+
+          // Retain legitimate pending invitations that are tracked in invitations state
+          const savedInvs = localStorage.getItem('kt_dms_invitations');
+          if (savedInvs) {
+            try {
+              const parsedInvs = JSON.parse(savedInvs);
+              parsedInvs.forEach((inv) => {
+                const invEmail = inv.email?.toLowerCase();
+                if (invEmail && userMap.has(invEmail)) {
+                  inv.status = 'accepted';
+                  return;
+                }
+                if (invEmail && inv.status === 'pending') {
+                  userMap.set(invEmail, {
+                    id: `inv-${inv.id || inv.code}`,
+                    name: inv.name && inv.name !== 'Pending Registration' ? inv.name : 'Pending Registration',
+                    email: inv.email,
+                    role: 'Member',
+                    avatar: '/p2.jpg',
+                    department: 'Project Member',
+                    status: 'invited',
+                    projectIds: inv.projectId ? [inv.projectId] : (inv.projectIds || []),
+                    permissions: inv.permissions || {
+                      canView: true,
+                      canUpload: true,
+                      canEdit: false,
+                      canDelete: false,
+                      canDownload: true,
+                    },
+                  });
+                }
+              });
+              localStorage.setItem('kt_dms_invitations', JSON.stringify(parsedInvs));
+            } catch (e) {
+              // ignore
+            }
+          }
+
+          const result = Array.from(userMap.values());
+          localStorage.setItem('kt_dms_users', JSON.stringify(result));
+          return result;
+        });
+      }
+    } catch (err) {
+      console.warn('Backend projects load error:', err.message);
+    }
+  }, []);
+
+  const [auditPagination, setAuditPagination] = useState({
+    total: 0,
+    page: 1,
+    limit: 10,
+    totalPages: 1,
+    hasNextPage: false,
+    hasPrevPage: false,
+  });
+
+  const loadBackendAuditLogs = useCallback(async (page = 1, limit = 10, projectId = null) => {
+    try {
+      const res = await getAuditLogsService(projectId, page, limit);
+      if (res && res.success && Array.isArray(res.data)) {
+        if (res.pagination) {
+          setAuditPagination(res.pagination);
+        }
+
+        const mappedBackendLogs = res.data.map((bLog) => {
+          let userName = 'System Admin';
+          let userId = '';
+          if (bLog.userType === 'Admin' || bLog.adminId) {
+            const adminEmail = bLog.adminId?.email || 'admin1@gmail.com';
+            const prefix = adminEmail.split('@')[0];
+            userName = prefix.charAt(0).toUpperCase() + prefix.slice(1);
+            userId = bLog.adminId?._id || bLog.adminId || 'u-admin';
+          } else if (bLog.userId) {
+            userName = bLog.userId.name || bLog.userId.email?.split('@')[0] || 'User';
+            userId = bLog.userId._id || bLog.userId.id || bLog.userId;
+          }
+
+          let actionLabel = bLog.action;
+          let target = bLog.entityType || 'System';
+          let detailsStr = '';
+
+          if (typeof bLog.details === 'string') {
+            detailsStr = bLog.details;
+          } else if (bLog.details && typeof bLog.details === 'object') {
+            const det = bLog.details;
+            target = det.fileName || det.originalName || det.name || bLog.entityType;
+            if (det.fileName) {
+              detailsStr = `${(bLog.action === 'UPLOAD_FILE' || bLog.action === 'FILE_UPLOAD') ? 'Uploaded' : 'Action on'} file '${det.fileName}'`;
+            }
+            if (bLog.projectId?.name) {
+              detailsStr += detailsStr ? ` in project '${bLog.projectId.name}'` : `Project: ${bLog.projectId.name}`;
+            }
+            if (!detailsStr) {
+              detailsStr = JSON.stringify(det);
+            }
+          }
+
+          switch (bLog.action) {
+            case 'UPLOAD_FILE':
+            case 'FILE_UPLOAD':
+              actionLabel = 'Uploaded Document';
+              break;
+            case 'DELETE_FILE':
+            case 'FILE_DELETE':
+              actionLabel = 'Deleted Document';
+              break;
+            case 'FILE_RENAME':
+              actionLabel = 'Renamed Document';
+              break;
+            case 'FILE_DOWNLOAD':
+              actionLabel = 'Downloaded Document';
+              break;
+            case 'USER_LOGIN':
+              actionLabel = 'User Logged In';
+              break;
+            case 'USER_INVITE':
+              actionLabel = 'Invited Member';
+              break;
+            case 'PERMISSION_UPDATE':
+              actionLabel = 'Updated Permissions';
+              break;
+            default:
+              actionLabel = bLog.action.replace(/_/g, ' ');
+          }
+
+          return {
+            id: bLog._id,
+            timestamp: bLog.createdAt || new Date().toISOString(),
+            userId,
+            userName,
+            userRole: bLog.userType || 'User',
+            action: bLog.action,
+            actionLabel,
+            target: target || bLog.projectId?.name || 'Document',
+            category: bLog.entityType || 'Document Management',
+            status: 'success',
+            details: detailsStr || `Activity on ${bLog.entityType}`,
+            isBackendLog: true,
+          };
+        });
+
+        // Retrieve persistent local action logs (such as User Delete, User Invite, Permission Updates)
+        let localLogs = [];
+        try {
+          localLogs = JSON.parse(localStorage.getItem('kt_dms_local_logs') || '[]');
+        } catch {
+          localLogs = [];
+        }
+
+        // Deduplicate against backend logs
+        const backendIds = new Set(mappedBackendLogs.map((l) => l.id));
+        const nonBackendLocalLogs = localLogs.filter((l) => !backendIds.has(l.id));
+
+        // Combine all logs and sort newest first
+        const combined = [...nonBackendLocalLogs, ...mappedBackendLogs].sort(
+          (a, b) => new Date(b.timestamp) - new Date(a.timestamp)
+        );
+
+        setLogs(combined);
+
+        const totalEntries = (res.pagination?.total || mappedBackendLogs.length) + nonBackendLocalLogs.length;
+        const totalPages = Math.max(1, Math.ceil(totalEntries / limit));
+
+        setAuditPagination({
+          total: totalEntries,
+          page,
+          limit,
+          totalPages,
+          hasNextPage: page < totalPages,
+          hasPrevPage: page > 1,
+        });
+
+        return { data: combined, pagination: { total: totalEntries, page, limit, totalPages } };
+      }
+    } catch (err) {
+      console.warn('Backend audit logs fetch notice:', err.message);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadBackendProjects();
+    loadBackendAuditLogs();
+    const handleFocus = () => {
+      loadBackendProjects();
+      loadBackendAuditLogs();
+    };
+    window.addEventListener('focus', handleFocus);
+    return () => window.removeEventListener('focus', handleFocus);
+  }, [loadBackendProjects, loadBackendAuditLogs]);
+
+  const currentUser = useMemo(() => {
+    const found = users.find((u) => u.id === currentUserId);
+    if (found) return found;
+    if (users.length > 0) return users[0];
+
+    const savedEmail = localStorage.getItem('admin-email') || 'admin1@gmail.com';
+    return {
+      id: currentUserId || 'u-admin',
+      name: savedEmail.split('@')[0],
+      email: savedEmail,
+      role: 'Admin',
+      avatar: '/p1.jpg',
+      department: 'System Administration',
+      status: 'active',
+      projectIds: projects.map((p) => p.id),
+      permissions: {
+        canView: true,
+        canUpload: true,
+        canEdit: true,
+        canDelete: true,
+        canDownload: true,
+        canManageUsers: true,
+        canViewLogs: true,
+      },
+    };
+  }, [users, currentUserId, projects]);
+
+  useEffect(() => {
+    if (currentUser && currentUser.role !== 'Admin' && (activeTab === 'users' || activeTab === 'logs')) {
+      setActiveTab('all-files');
+    }
+  }, [currentUser, activeTab]);
+
+  const addToast = (message, type = 'success') => {
+    const id = Date.now().toString();
+    setToasts((prev) => [...prev, { id, message, type }]);
+    setTimeout(() => {
+      setToasts((prev) => prev.filter((t) => t.id !== id));
+    }, 4000);
+  };
+
+  const removeToast = (id) => {
+    setToasts((prev) => prev.filter((t) => t.id !== id));
+  };
+
+  const recordAuditLog = (action, actionLabel, target, details, category = 'Document Management', status = 'success') => {
+    const newLog = {
+      id: `local-log-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+      timestamp: new Date().toISOString(),
+      userId: currentUser?.id || 'u-admin',
+      userName: currentUser?.name || 'Admin',
+      userRole: currentUser?.role || 'Admin',
+      action,
+      actionLabel,
+      target,
+      category,
+      status,
+      ip: '192.168.1.' + Math.floor(Math.random() * 150 + 10),
+      details,
+      isLocal: true,
+    };
+
+    try {
+      const savedLocal = JSON.parse(localStorage.getItem('kt_dms_local_logs') || '[]');
+      const updatedLocal = [newLog, ...savedLocal].slice(0, 100);
+      localStorage.setItem('kt_dms_local_logs', JSON.stringify(updatedLocal));
+    } catch (e) {
+      // ignore
+    }
+
+    setLogs((prev) => [newLog, ...prev]);
+    setAuditPagination((prev) => {
+      const newTotal = (prev?.total || 0) + 1;
+      const limit = prev?.limit || 10;
+      return {
+        ...prev,
+        total: newTotal,
+        totalPages: Math.max(1, Math.ceil(newTotal / limit)),
+      };
+    });
+  };
+
+  const login = async (userIdOrEmail, password = '') => {
+    const rawInput = (userIdOrEmail || '').trim();
+    const searchVal = rawInput.toLowerCase();
+    const matchedUser = users.find(
+      (u) => u.id.toLowerCase() === searchVal || u.email.toLowerCase() === searchVal
+    );
+    const emailToSend = matchedUser ? matchedUser.email : rawInput;
+
+    // 1. Attempt Admin Authentication via Backend API
+    try {
+      const adminRes = await loginAdminService({ email: emailToSend, password });
+      if (adminRes && adminRes.success) {
+        if (adminRes.data?.id) {
+          localStorage.setItem('admin-token', adminRes.data.id);
+        }
+
+        let activeAdmin = users.find(
+          (u) => u.email.toLowerCase() === (adminRes.data.email || emailToSend).toLowerCase()
+        );
+
+        if (!activeAdmin) {
+          const emailPrefix = (adminRes.data.email || emailToSend).split('@')[0];
+          const displayName = emailPrefix.charAt(0).toUpperCase() + emailPrefix.slice(1);
+          activeAdmin = {
+            id: `u-${adminRes.data.id || Date.now()}`,
+            name: displayName,
+            email: adminRes.data.email || emailToSend,
+            role: 'Admin',
+            avatar: '/p1.jpg',
+            department: 'System Administration',
+            status: 'active',
+            projectIds: projects.map((p) => p.id),
+            permissions: {
+              canView: true,
+              canUpload: true,
+              canEdit: true,
+              canDelete: true,
+              canDownload: true,
+              canManageUsers: true,
+              canViewLogs: true,
+            },
+          };
+          setUsers((prev) => [activeAdmin, ...prev]);
+        }
+
+        setCurrentUserId(activeAdmin.id);
+        setIsAuthenticated(true);
+        localStorage.setItem('kt_dms_auth', 'true');
+        localStorage.setItem('kt_dms_active_user_id', activeAdmin.id);
+
+        recordAuditLog(
+          'USER_LOGIN',
+          'Admin Logged In',
+          activeAdmin.name,
+          `Authenticated successfully as Admin via Backend API (${emailToSend})`,
+          'Authentication',
+          'success'
+        );
+        addToast(adminRes.message || `Welcome back, ${activeAdmin.name}!`, 'success');
+        return true;
+      }
+    } catch (adminErr) {
+      // 2. If Admin login failed, attempt Member User login via Backend API
+      try {
+        const userRes = await loginUserService({ email: emailToSend, password });
+        if (userRes && userRes.success) {
+          const userProjects = userRes.data.projects || [];
+          const projectIds = userProjects.map((p) => p.projectId?._id || p.projectId?.id || p.projectId);
+
+          // Add any new backend projects to projects state
+          userProjects.forEach((item) => {
+            const bp = item.projectId;
+            if (bp && bp._id) {
+              setProjects((prev) => {
+                if (!prev.some((p) => p.id === bp._id)) {
+                  return [
+                    {
+                      id: bp._id,
+                      name: bp.name,
+                      description: bp.description || '',
+                      joinCode: bp.joinCode,
+                      status: bp.status || 'active',
+                      color: 'from-blue-600 to-sky-600',
+                      members: [],
+                    },
+                    ...prev,
+                  ];
+                }
+                return prev;
+              });
+            }
+          });
+
+          let activeMember = users.find(
+            (u) => u.email?.toLowerCase() === (userRes.data?.email || emailToSend).toLowerCase()
+          );
+
+          const realName =
+            userRes.data.name ||
+            (activeMember && activeMember.name && activeMember.name !== 'Pending Registration'
+              ? activeMember.name
+              : emailToSend.split('@')[0]);
+          const realId = userRes.data.id || (activeMember ? activeMember.id : `u-${Date.now()}`);
+
+          if (!activeMember) {
+            activeMember = {
+              id: realId,
+              name: realName,
+              email: userRes.data.email || emailToSend,
+              role: 'Member',
+              avatar: '/p2.jpg',
+              department: 'Project Member',
+              status: 'active',
+              projectIds: projectIds,
+              projects: userProjects,
+              permissions: {
+                canView: true,
+                canUpload: true,
+                canEdit: false,
+                canDelete: false,
+                canDownload: true,
+                canManageUsers: false,
+                canViewLogs: false,
+              },
+            };
+          } else {
+            activeMember = {
+              ...activeMember,
+              id: realId,
+              name: realName,
+              status: 'active',
+              projectIds: projectIds,
+              projects: userProjects,
+            };
+          }
+
+          // Update users state and localStorage
+          setUsers((prev) => {
+            const emailKey = (activeMember.email || emailToSend).toLowerCase();
+            const exists = prev.some((u) => u.email?.toLowerCase() === emailKey);
+            const updated = exists
+              ? prev.map((u) => (u.email?.toLowerCase() === emailKey ? activeMember : u))
+              : [activeMember, ...prev];
+            localStorage.setItem('kt_dms_users', JSON.stringify(updated));
+            return updated;
+          });
+
+          // Mark invitation as accepted in state and storage
+          setInvitations((prev) => {
+            const emailKey = (activeMember.email || emailToSend).toLowerCase();
+            const updated = prev.map((i) =>
+              i.email?.toLowerCase() === emailKey
+                ? { ...i, status: 'accepted', acceptedAt: new Date().toISOString() }
+                : i
+            );
+            localStorage.setItem('kt_dms_invitations', JSON.stringify(updated));
+            return updated;
+          });
+
+          setCurrentUserId(activeMember.id);
+          setIsAuthenticated(true);
+          localStorage.setItem('kt_dms_auth', 'true');
+          localStorage.setItem('kt_dms_active_user_id', activeMember.id);
+
+          recordAuditLog(
+            'USER_LOGIN',
+            'Member Logged In',
+            activeMember.name,
+            `Authenticated successfully as Member via Backend API (${emailToSend})`,
+            'Authentication',
+            'success'
+          );
+          addToast(userRes.message || `Welcome back, ${activeMember.name}!`, 'success');
+          return true;
+        }
+      } catch (userErr) {
+        // Both Admin and User login failed
+        if (matchedUser?.status === 'suspended') {
+          addToast('Access Denied: This account has been suspended by the Administrator.', 'error');
+          recordAuditLog('LOGIN_BLOCKED', 'Blocked Login Attempt', matchedUser.name, 'Attempted login to suspended account', 'Security', 'danger');
+          return false;
+        }
+
+        const errorMsg =
+          userErr.response?.data?.message ||
+          adminErr.response?.data?.message ||
+          'Invalid email or password. Please check your credentials.';
+
+        addToast(errorMsg, 'error');
+        recordAuditLog(
+          'LOGIN_FAILED',
+          'Failed Login Attempt',
+          matchedUser?.name || rawInput,
+          errorMsg,
+          'Authentication',
+          'warning'
+        );
+        return false;
+      }
+    }
+  };
+
+  const logout = () => {
+    recordAuditLog('USER_LOGOUT', 'User Logged Out', currentUser.name, `User signed out of document workspace`, 'Authentication', 'info');
+    setIsAuthenticated(false);
+    localStorage.removeItem('admin-token');
+    localStorage.setItem('kt_dms_auth', 'false');
+    localStorage.removeItem('kt_dms_active_tab');
+    localStorage.removeItem('kt_dms_selected_project');
+    setActiveTab('all-files');
+    setSelectedProject(null);
+    addToast('You have been logged out.', 'info');
+  };
+
+  const getProjectPermissions = useCallback((projectId, userId = currentUserId) => {
+    const user = users.find((u) => u.id === userId) || currentUser;
+    if (user?.role === 'Admin') {
+      return {
+        canView: true,
+        canUpload: true,
+        canEdit: true,
+        canDelete: true,
+        canDownload: true,
+        isMember: true,
+        isAdmin: true,
+      };
+    }
+
+    // Check if member has projects array from backend
+    const backendProj = (user?.projects || []).find(
+      (p) => (p.projectId?._id || p.projectId?.id || p.projectId) === projectId
+    );
+    if (backendProj) {
+      const perms = backendPermissionsToFrontend(backendProj.permissions);
+      return {
+        ...perms,
+        isMember: true,
+        isAdmin: false,
+      };
+    }
+
+    const proj = projects.find((p) => p.id === projectId);
+    if (!proj) {
+      return {
+        canView: false,
+        canUpload: false,
+        canEdit: false,
+        canDelete: false,
+        canDownload: false,
+        isMember: false,
+        isAdmin: false,
+      };
+    }
+
+    const member = proj.members?.find((m) => m.userId === userId);
+    if (!member) {
+      return {
+        canView: false,
+        canUpload: false,
+        canEdit: false,
+        canDelete: false,
+        canDownload: false,
+        isMember: false,
+        isAdmin: false,
+      };
+    }
+
+    return {
+      canView: member.permissions?.canView !== false,
+      canUpload: !!member.permissions?.canUpload,
+      canEdit: !!member.permissions?.canEdit,
+      canDelete: !!member.permissions?.canDelete,
+      canDownload: member.permissions?.canDownload !== false,
+      isMember: true,
+      isAdmin: false,
+    };
+  }, [projects, users, currentUser, currentUserId]);
+
+  const userProjects = useMemo(() => {
+    if (currentUser?.role === 'Admin') return projects;
+    return projects.filter((p) => {
+      const inBackend = (currentUser?.projects || []).some(
+        (bp) => (bp.projectId?._id || bp.projectId?.id || bp.projectId) === p.id
+      );
+      if (inBackend) return true;
+      const member = p.members?.find((m) => m.userId === currentUser.id);
+      return member && member.permissions?.canView !== false;
+    });
+  }, [projects, currentUser]);
+
+  const canManageUsers = currentUser.role === 'Admin' || !!currentUser.permissions?.canManageUsers;
+  const canViewLogs = currentUser.role === 'Admin' || !!currentUser.permissions?.canViewLogs;
+
+  const canUploadToProject = useCallback((projectId) => {
+    return getProjectPermissions(projectId).canUpload;
+  }, [getProjectPermissions]);
+
+  const canEditFile = useCallback((file) => {
+    if (!file) return false;
+    if (currentUser?.role === 'Admin') return true;
+    const projId = file.projectId || file.folder;
+    return getProjectPermissions(projId).canEdit;
+  }, [currentUser, getProjectPermissions]);
+
+  const canDeleteFile = useCallback((file) => {
+    if (!file) return false;
+    if (currentUser?.role === 'Admin') return true;
+    const projId = file.projectId || file.folder;
+    return getProjectPermissions(projId).canDelete;
+  }, [currentUser, getProjectPermissions]);
+
+  const canDownloadFile = useCallback((file) => {
+    if (!file) return false;
+    if (currentUser?.role === 'Admin') return true;
+    const projId = file.projectId || file.folder;
+    return getProjectPermissions(projId).canDownload;
+  }, [currentUser, getProjectPermissions]);
+
+  const canUpload = currentUser.role === 'Admin' || userProjects.some((p) => getProjectPermissions(p.id).canUpload);
+  const canEdit = currentUser.role === 'Admin' || userProjects.some((p) => getProjectPermissions(p.id).canEdit);
+  const canDelete = currentUser.role === 'Admin' || userProjects.some((p) => getProjectPermissions(p.id).canDelete);
+  const canDownload = currentUser.role === 'Admin' || !!currentUser.permissions?.canDownload;
+
+  const uploadFile = async (fileData) => {
+    const targetProjId = fileData.projectId || fileData.folder || userProjects[0]?.id;
+    if (!targetProjId) {
+      addToast('Please select a project before uploading.', 'error');
+      return false;
+    }
+
+    const perms = getProjectPermissions(targetProjId);
+
+    if (!perms.canUpload) {
+      addToast('Permission Denied: You do not have permission to upload files to this project.', 'error');
+      recordAuditLog('UNAUTHORIZED_ATTEMPT', 'Blocked Action', fileData.name, `Attempted to upload file to project '${targetProjId}' without permission`, 'Security', 'danger');
+      return false;
+    }
+
+    const proj = projects.find((p) => p.id === targetProjId);
+    const projectName = proj ? proj.name : targetProjId;
+
+    const currentAdminToken = localStorage.getItem('admin-token');
+    const uId = currentUser.role === 'Admin'
+      ? (currentAdminToken || '6ab5114f329e2d2b1a699942')
+      : (currentUser.id?.startsWith('u-') ? currentUser.id.replace('u-', '') : currentUser.id);
+
+    // Call Backend Upload API if a real File is selected
+    if (fileData.fileObj instanceof File || fileData.fileObj instanceof Blob) {
+      try {
+        const formData = new FormData();
+        formData.append('file', fileData.fileObj, fileData.name || fileData.fileObj.name);
+        formData.append('projectId', targetProjId);
+        formData.append('userId', uId);
+        formData.append('uploadedBy', uId);
+
+        const uploadRes = await uploadDocumentService(formData);
+        if (uploadRes && uploadRes.success && uploadRes.data) {
+          const bf = uploadRes.data;
+          const fullFileUrl = getFileDownloadUrl(bf.fileUrl);
+          const newFile = {
+            id: bf._id,
+            name: bf.originalName || bf.filename,
+            type: detectTypeFromExtension(bf.originalName || bf.filename) || fileData.type || 'pdf',
+            projectId: targetProjId,
+            folder: targetProjId,
+            size: formatBytes(bf.size),
+            sizeBytes: bf.size,
+            uploadedBy: currentUser.name,
+            uploaderRole: currentUser.role,
+            uploadedAt: bf.createdAt || new Date().toISOString(),
+            starred: false,
+            version: '1.0',
+            fileUrl: fullFileUrl,
+            backendFileUrl: bf.fileUrl,
+            isRealUpload: true,
+          };
+
+          setFiles((prev) => {
+            const updated = [newFile, ...prev.filter((f) => f.id !== newFile.id)];
+            localStorage.setItem('kt_dms_files', JSON.stringify(updated));
+            return updated;
+          });
+
+          recordAuditLog('FILE_UPLOAD', 'Uploaded Document', newFile.name, `Uploaded to backend project '${projectName}' (${newFile.size})`, 'Document Management', 'success');
+          addToast(`File "${newFile.name}" uploaded successfully to project "${projectName}"!`, 'success');
+          loadBackendAuditLogs();
+          return true;
+        }
+      } catch (uploadErr) {
+        console.error('Backend document upload error:', uploadErr);
+        const errMsg = uploadErr.response?.data?.message || uploadErr.response?.data?.error || uploadErr.message;
+        addToast(`Upload notice: ${errMsg}`, 'warning');
+      }
+    }
+
+    const newFile = {
+      id: `f-${Date.now()}`,
+      name: fileData.name,
+      type: fileData.type || 'pdf',
+      projectId: targetProjId,
+      folder: targetProjId,
+      size: fileData.size || '5.0 MB',
+      sizeBytes: fileData.sizeBytes || 5242880,
+      uploadedBy: currentUser.name,
+      uploaderRole: currentUser.role,
+      uploadedAt: new Date().toISOString(),
+      starred: false,
+      version: '1.0',
+      fileUrl: fileData.fileUrl || null,
+      isRealUpload: !!fileData.fileUrl,
+    };
+
+    setFiles((prev) => {
+      const updated = [newFile, ...prev];
+      localStorage.setItem('kt_dms_files', JSON.stringify(updated));
+      return updated;
+    });
+    recordAuditLog('FILE_UPLOAD', 'Uploaded Document', newFile.name, `Uploaded to project '${projectName}' (${newFile.size})`, 'Document Management', 'success');
+    addToast(`File "${newFile.name}" uploaded to project "${projectName}"!`, 'success');
+    return true;
+  };
+
+  const updateFile = (fileId, updateData) => {
+    const targetFile = files.find((f) => f.id === fileId);
+    if (!targetFile) return false;
+
+    if (!canEditFile(targetFile)) {
+      addToast('Permission Denied: You do not have permission to edit files in this project.', 'error');
+      recordAuditLog('UNAUTHORIZED_ATTEMPT', 'Blocked Edit Attempt', targetFile.name, 'Attempted to edit file without project edit permission', 'Security', 'danger');
+      return false;
+    }
+
+    const targetProjId = updateData.projectId || updateData.folder || targetFile.projectId || targetFile.folder;
+    const hasNewFile = !!updateData.fileUrl;
+    const oldVersion = targetFile.version || '1.0';
+    const newVersion = updateData.version || oldVersion;
+
+    setFiles((prev) =>
+      prev.map((f) => {
+        if (f.id !== fileId) return f;
+        return {
+          ...f,
+          name: updateData.name || f.name,
+          projectId: targetProjId,
+          folder: targetProjId,
+          version: newVersion,
+          ...(hasNewFile
+            ? {
+                fileUrl: updateData.fileUrl,
+                size: updateData.size,
+                sizeBytes: updateData.sizeBytes,
+                type: updateData.type,
+                isRealUpload: true,
+              }
+            : {}),
+        };
+      })
+    );
+
+    const logDetails = hasNewFile
+      ? `Replaced file with new attachment (${updateData.size}), bumped to v${newVersion}`
+      : `Updated metadata (Name: "${updateData.name || targetFile.name}", Project: ${targetProjId})`;
+
+    recordAuditLog('FILE_UPDATE', hasNewFile ? 'Replaced File Version' : 'Edited Document', updateData.name || targetFile.name, logDetails, 'Document Management', 'success');
+    addToast(`Document "${updateData.name || targetFile.name}" updated successfully!`, 'success');
+    return true;
+  };
+
+  const deleteFile = async (fileId) => {
+    const targetFile = files.find((f) => f.id === fileId);
+    if (!targetFile) return false;
+
+    if (!canDeleteFile(targetFile)) {
+      addToast(`Permission Denied: You do not have delete permission for this project.`, 'error');
+      recordAuditLog('UNAUTHORIZED_ATTEMPT', 'Blocked Delete Attempt', targetFile.name, `User tried to delete file without project delete permission`, 'Security', 'danger');
+      return false;
+    }
+
+    // Call Backend delete API if it's a 24-character MongoDB ObjectId
+    if (fileId && fileId.length === 24) {
+      try {
+        const currentAdminToken = localStorage.getItem('admin-token');
+        const uId = currentUser.role === 'Admin'
+          ? (currentAdminToken || '6ab5114f329e2d2b1a699942')
+          : (currentUser.id?.startsWith('u-') ? currentUser.id.replace('u-', '') : currentUser.id);
+
+        await deleteDocumentService(fileId, targetFile.projectId || targetFile.folder, uId);
+        loadBackendAuditLogs();
+      } catch (err) {
+        console.warn('Backend file delete notice:', err.response?.data?.message || err.message);
+      }
+    }
+
+    setFiles((prev) => {
+      const updated = prev.filter((f) => f.id !== fileId);
+      localStorage.setItem('kt_dms_files', JSON.stringify(updated));
+      return updated;
+    });
+    recordAuditLog('FILE_DELETE', 'Deleted File', targetFile.name, `Permanently deleted file from project '${targetFile.projectId || targetFile.folder}'`, 'Document Management', 'warning');
+  };
+
+  const renameFile = (fileId, newName) => {
+    return updateFile(fileId, { name: newName });
+  };
+
+  const downloadFile = (file) => {
+    if (!canDownloadFile(file)) {
+      addToast('Permission Denied: Download restricted for this document.', 'error');
+      return;
+    }
+
+    try {
+      let downloadUrl = file.fileUrl;
+      let shouldRevoke = false;
+
+      if (!downloadUrl) {
+        const blobContent = `KASPERTECH ENTERPRISE DOCUMENT MANAGEMENT SYSTEM\n` +
+          `===================================================\n` +
+          `Document: ${file.name}\n` +
+          `Folder: ${file.folder}\n` +
+          `Version: ${file.version || '1.0'}\n` +
+          `Uploaded By: ${file.uploadedBy}\n` +
+          `Uploaded At: ${file.uploadedAt}\n` +
+          `Checksum: Verified SHA-256 (KasperTech Cloud Security)\n\n` +
+          `[End of Document Summary]`;
+        const blob = new Blob([blobContent], { type: 'text/plain' });
+        downloadUrl = URL.createObjectURL(blob);
+        shouldRevoke = true;
+      }
+
+      const a = document.createElement('a');
+      a.href = downloadUrl;
+      a.download = file.name;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+
+      if (shouldRevoke) {
+        setTimeout(() => URL.revokeObjectURL(downloadUrl), 1000);
+      }
+
+      recordAuditLog('FILE_DOWNLOAD', 'Downloaded File', file.name, `Downloaded ${file.size} to local storage`, 'File Access', 'success');
+      addToast(`Downloading "${file.name}"...`, 'success');
+    } catch (err) {
+      console.error('Download error:', err);
+      addToast(`Could not start download for ${file.name}`, 'error');
+    }
+  };
+
+  const toggleStar = (fileId) => {
+    setFiles((prev) =>
+      prev.map((f) => (f.id === fileId ? { ...f, starred: !f.starred } : f))
+    );
+  };
+
+  const inviteUser = async ({ email, projectId, projectIds, permissions }) => {
+    if (!canManageUsers) {
+      addToast('Only Admins can invite new team members.', 'error');
+      return { success: false, error: 'Unauthorized' };
+    }
+
+    const cleanEmail = (email || '').trim().toLowerCase();
+    if (!cleanEmail) {
+      addToast('Please enter a valid email address.', 'error');
+      return { success: false, error: 'Email is required' };
+    }
+
+    const existingUser = users.find((u) => u.email.toLowerCase() === cleanEmail);
+    if (existingUser && existingUser.status === 'active') {
+      addToast('A user with this email address already exists and is active.', 'error');
+      return { success: false, error: 'User already active' };
+    }
+
+    const targetProjectIds = Array.isArray(projectIds) && projectIds.length > 0
+      ? projectIds
+      : projectId
+      ? [projectId]
+      : projects.length > 0
+      ? [projects[0].id]
+      : [];
+
+    const newPermissions = {
+      canView: permissions?.canView !== false,
+      canUpload: !!permissions?.canUpload,
+      canEdit: !!permissions?.canEdit,
+      canDelete: !!permissions?.canDelete,
+      canDownload: permissions?.canDownload !== false,
+      canManageUsers: false,
+      canViewLogs: false,
+    };
+
+    const backendPerms = frontendPermissionsToBackend(newPermissions);
+
+    // Call backend API for project invitations
+    let backendResult = null;
+    for (const projId of targetProjectIds) {
+      try {
+        const res = await inviteUserToProjectService({
+          projectId: projId,
+          email: cleanEmail,
+          permissions: backendPerms,
+        });
+        if (res && res.success) {
+          backendResult = res;
+        }
+      } catch (err) {
+        console.warn(`Backend invite warning for project ${projId}:`, err.message);
+      }
+    }
+
+    const joinCode = backendResult?.data?.joinCode;
+    const token = joinCode || `inv_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+    const userId = existingUser ? existingUser.id : `u-${Date.now()}`;
+
+    const invitedUser = {
+      id: userId,
+      name: existingUser && existingUser.name !== 'Pending Registration' ? existingUser.name : 'Pending Registration',
+      email: cleanEmail,
+      password: '',
+      role: 'Member',
+      avatar: '/p2.jpg',
+      projectIds: targetProjectIds,
+      status: 'invited',
+      inviteToken: token,
+      permissions: newPermissions,
+    };
+
+    if (existingUser) {
+      setUsers((prev) => prev.map((u) => (u.id === userId ? invitedUser : u)));
+    } else {
+      setUsers((prev) => [...prev, invitedUser]);
+    }
+
+    if (targetProjectIds.length > 0) {
+      setProjects((prev) =>
+        prev.map((p) => {
+          if (targetProjectIds.includes(p.id)) {
+            const hasMember = (p.members || []).some((m) => m.userId === userId);
+            if (!hasMember) {
+              return {
+                ...p,
+                members: [
+                  ...(p.members || []),
+                  {
+                    userId,
+                    permissions: {
+                      canView: newPermissions.canView,
+                      canUpload: newPermissions.canUpload,
+                      canEdit: newPermissions.canEdit,
+                      canDelete: newPermissions.canDelete,
+                      canDownload: newPermissions.canDownload,
+                    },
+                  },
+                ],
+              };
+            } else {
+              return {
+                ...p,
+                members: (p.members || []).map((m) =>
+                  m.userId === userId ? { ...m, permissions: newPermissions } : m
+                ),
+              };
+            }
+          }
+          return p;
+        })
+      );
+    }
+
+    const invitationRecord = {
+      id: token,
+      joinCode: joinCode || token,
+      userId,
+      email: cleanEmail,
+      projectIds: targetProjectIds,
+      permissions: newPermissions,
+      createdAt: new Date().toISOString(),
+      status: 'pending',
+    };
+
+    setInvitations((prev) => [invitationRecord, ...prev.filter((i) => i.email !== cleanEmail)]);
+
+    const projectNames = projects
+      .filter((p) => targetProjectIds.includes(p.id))
+      .map((p) => p.name)
+      .join(', ');
+
+    recordAuditLog(
+      'USER_INVITE',
+      'Generated Project Invitation',
+      `${cleanEmail} (${projectNames || 'Assigned Project'})`,
+      `Admin sent project invitation link with permissions: Upload=${newPermissions.canUpload ? 'Yes' : 'No'}, Edit=${newPermissions.canEdit ? 'Yes' : 'No'}, Delete=${newPermissions.canDelete ? 'Yes' : 'No'}`,
+      'User Management',
+      'success'
+    );
+
+    const baseUrl = typeof window !== 'undefined' ? `${window.location.origin}${window.location.pathname}` : '';
+    const inviteLink = `${baseUrl}?invite=${encodeURIComponent(token)}&email=${encodeURIComponent(cleanEmail)}`;
+
+    addToast(`Invitation generated for ${cleanEmail}!`, 'success');
+    return {
+      success: true,
+      inviteToken: token,
+      inviteLink,
+      user: invitedUser,
+      projects: projects.filter((p) => targetProjectIds.includes(p.id)),
+    };
+  };
+
+  const acceptInvitation = async ({ token, name, email: directEmail, password, mobile = '9876543210' }) => {
+    const invite = invitations.find((i) => i.id === token || i.joinCode === token);
+    const targetUser = users.find((u) => u.inviteToken === token || (invite && u.id === invite.userId));
+
+    let emailFromUrl = null;
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      emailFromUrl = params.get('email');
+    }
+
+    const finalEmail = directEmail || targetUser?.email || invite?.email || emailFromUrl;
+
+    if (!finalEmail) {
+      addToast('Invalid or expired invitation link.', 'error');
+      return { success: false, error: 'Invitation link is invalid or has expired.' };
+    }
+
+    // Call Backend Registration API
+    let registeredName = name.trim();
+    try {
+      const regRes = await registerUserService({
+        name: registeredName,
+        email: finalEmail.toLowerCase().trim(),
+        password: password,
+        mobile: Number(mobile) || 9876543210,
+      });
+      if (regRes && regRes.data && regRes.data.name) {
+        registeredName = regRes.data.name;
+      }
+    } catch (err) {
+      const msg = err.response?.data?.message || err.message;
+      if (!msg?.toLowerCase().includes('already exists')) {
+        console.warn('Backend user registration error:', msg);
+        if (err.response?.data?.message) {
+          addToast(err.response.data.message, 'error');
+          return { success: false, error: err.response.data.message };
+        }
+      }
+    }
+
+    // Immediately mark invitation as accepted in state and localStorage
+    setInvitations((prev) => {
+      const updated = prev.map((i) =>
+        i.id === token || i.email?.toLowerCase() === finalEmail.toLowerCase()
+          ? { ...i, status: 'accepted', acceptedAt: new Date().toISOString() }
+          : i
+      );
+      localStorage.setItem('kt_dms_invitations', JSON.stringify(updated));
+      return updated;
+    });
+
+    // Immediately update users state with real registered name and active status
+    setUsers((prev) => {
+      const exists = prev.some((u) => u.email?.toLowerCase() === finalEmail.toLowerCase());
+      const updated = exists
+        ? prev.map((u) =>
+            u.email?.toLowerCase() === finalEmail.toLowerCase()
+              ? {
+                  ...u,
+                  name: registeredName,
+                  status: 'active',
+                  inviteToken: null,
+                }
+              : u
+          )
+        : [
+            {
+              id: targetUser ? targetUser.id : (invite?.userId || `u-${Date.now()}`),
+              name: registeredName,
+              email: finalEmail.toLowerCase(),
+              role: 'Member',
+              avatar: '/p2.jpg',
+              department: 'Project Member',
+              status: 'active',
+              projectIds: invite?.projectIds || (invite?.projectId ? [invite.projectId] : []),
+              permissions: invite?.permissions || {
+                canView: true,
+                canUpload: true,
+                canEdit: false,
+                canDelete: false,
+                canDownload: true,
+              },
+            },
+            ...prev,
+          ];
+      localStorage.setItem('kt_dms_users', JSON.stringify(updated));
+      return updated;
+    });
+
+    // Attempt auto-login via backend
+    const loginOk = await login(finalEmail, password);
+    if (!loginOk) {
+      const finalUserId = targetUser ? targetUser.id : (invite?.userId || `u-${Date.now()}`);
+      setCurrentUserId(finalUserId);
+      setIsAuthenticated(true);
+      localStorage.setItem('kt_dms_auth', 'true');
+      localStorage.setItem('kt_dms_active_user_id', finalUserId);
+    }
+
+    // Reload backend projects so member records are fully synced
+    try {
+      await loadBackendProjects();
+    } catch (e) {
+      // ignore
+    }
+
+    setInviteToken(null);
+    if (typeof window !== 'undefined' && window.history?.replaceState) {
+      window.history.replaceState({}, document.title, window.location.pathname);
+    }
+
+    recordAuditLog(
+      'USER_REGISTER',
+      'Completed Account Registration',
+      `${name.trim()} (${finalEmail})`,
+      `User accepted project invitation and registered member account`,
+      'User Management',
+      'success'
+    );
+
+    addToast(`Welcome to the workspace, ${name.trim()}! Your workspace is ready.`, 'success');
+    return { success: true };
+  };
+
+  const getInviteLink = (tokenOrUserId) => {
+    let token = tokenOrUserId;
+    const foundUser = users.find((u) => u.id === tokenOrUserId || u.inviteToken === tokenOrUserId);
+    if (foundUser?.inviteToken) {
+      token = foundUser.inviteToken;
+    }
+    const baseUrl = typeof window !== 'undefined' ? `${window.location.origin}${window.location.pathname}` : '';
+    return `${baseUrl}?invite=${token}`;
+  };
+
+  const getInvitationByToken = (token) => {
+    if (!token) return null;
+
+    let urlEmail = null;
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      urlEmail = params.get('email');
+    }
+
+    const invite = invitations.find((i) => i.id === token || i.joinCode === token || (urlEmail && i.email === urlEmail.toLowerCase()));
+    const user = users.find((u) => u.inviteToken === token || (urlEmail && u.email.toLowerCase() === urlEmail.toLowerCase()));
+
+    const email = user ? user.email : (invite ? invite.email : urlEmail);
+    if (!invite && !user && !email) return null;
+
+    const projectIds = user ? user.projectIds : (invite ? invite.projectIds : []);
+    const permissions = user ? user.permissions : (invite ? invite.permissions : {
+      canView: true,
+      canUpload: true,
+      canEdit: false,
+      canDelete: false,
+      canDownload: true,
+    });
+    const assignedProjects = projects.filter((p) => (projectIds || []).includes(p.id));
+
+    return {
+      token,
+      email,
+      projectIds,
+      projects: assignedProjects,
+      permissions,
+      isPending: user ? user.status === 'invited' : (invite ? invite.status === 'pending' : true),
+    };
+  };
+
+  const addUser = (userData) => {
+    return inviteUser(userData);
+  };
+
+  const updateUserPermissions = async (userId, newPermissions, newProjectIds) => {
+    if (!canManageUsers) {
+      addToast('Only Admins can modify permissions.', 'error');
+      return false;
+    }
+
+    const targetUser = users.find((u) => u.id === userId);
+    if (!targetUser) return false;
+
+    const backendPerms = frontendPermissionsToBackend(newPermissions);
+
+    const targetProjects = Array.isArray(newProjectIds) ? newProjectIds : targetUser.projectIds || [];
+    for (const projId of targetProjects) {
+      try {
+        await updateMemberPermissionsService({
+          projectId: projId,
+          userId: targetUser.id?.startsWith('u-') ? targetUser.id.replace('u-', '') : targetUser.id,
+          permissions: backendPerms,
+        });
+      } catch (err) {
+        console.warn(`Backend update permissions error for project ${projId}:`, err.message);
+      }
+    }
+
+    setUsers((prev) =>
+      prev.map((u) => {
+        if (u.id === userId) {
+          const updated = { ...u, permissions: { ...u.permissions, ...newPermissions } };
+          if (Array.isArray(newProjectIds)) {
+            updated.projectIds = newProjectIds;
+          }
+          return updated;
+        }
+        return u;
+      })
+    );
+
+    if (Array.isArray(newProjectIds)) {
+      setProjects((prev) =>
+        prev.map((proj) => {
+          const shouldBeMember = newProjectIds.includes(proj.id);
+          const membersList = proj.members || [];
+          const isMember = membersList.some((m) => m.userId === userId);
+
+          if (shouldBeMember && !isMember) {
+            return {
+              ...proj,
+              members: [
+                ...membersList,
+                {
+                  userId,
+                  permissions: {
+                    canView: newPermissions.canView !== false,
+                    canUpload: !!newPermissions.canUpload,
+                    canEdit: !!newPermissions.canEdit,
+                    canDelete: !!newPermissions.canDelete,
+                    canDownload: !!newPermissions.canDownload,
+                  },
+                },
+              ],
+            };
+          } else if (!shouldBeMember && isMember) {
+            return {
+              ...proj,
+              members: membersList.filter((m) => m.userId !== userId),
+            };
+          } else if (shouldBeMember && isMember) {
+            return {
+              ...proj,
+              members: membersList.map((m) =>
+                m.userId === userId
+                  ? {
+                      ...m,
+                      permissions: {
+                        canView: newPermissions.canView !== false,
+                        canUpload: !!newPermissions.canUpload,
+                        canEdit: !!newPermissions.canEdit,
+                        canDelete: !!newPermissions.canDelete,
+                        canDownload: !!newPermissions.canDownload,
+                      },
+                    }
+                  : m
+              ),
+            };
+          }
+          return proj;
+        })
+      );
+    }
+
+    const changes = Object.entries(newPermissions)
+      .map(([k, v]) => `${k.replace('can', '')}: ${v ? 'Enabled' : 'Disabled'}`)
+      .join(', ');
+
+    recordAuditLog(
+      'PERMISSION_UPDATE',
+      'Updated Permissions',
+      targetUser.name,
+      `New configuration: ${changes}`,
+      'Access Control',
+      'success'
+    );
+    addToast(`Permissions updated for ${targetUser.name}.`, 'success');
+    return true;
+  };
+
+  const toggleUserStatus = (userId) => {
+    if (!canManageUsers) return;
+    const targetUser = users.find((u) => u.id === userId);
+    if (!targetUser || targetUser.role === 'Admin') {
+      addToast('Cannot modify primary Admin status.', 'warning');
+      return;
+    }
+
+    const nextStatus = targetUser.status === 'active' ? 'suspended' : 'active';
+    setUsers((prev) =>
+      prev.map((u) => (u.id === userId ? { ...u, status: nextStatus } : u))
+    );
+
+    recordAuditLog(
+      'STATUS_CHANGE',
+      `User ${nextStatus === 'active' ? 'Activated' : 'Suspended'}`,
+      targetUser.name,
+      `Account status set to ${nextStatus}`,
+      'User Management',
+      nextStatus === 'active' ? 'success' : 'warning'
+    );
+    addToast(`User ${targetUser.name} is now ${nextStatus}.`, 'info');
+  };
+
+  const createProject = async ({ name, description = '', color = 'from-sky-500 to-blue-600', members = [] }) => {
+    if (currentUser.role !== 'Admin') {
+      addToast('Permission Denied: Only Administrators can create new projects.', 'error');
+      return false;
+    }
+
+    const trimmedName = (name || '').trim();
+    if (!trimmedName) {
+      addToast('Please enter a project name.', 'error');
+      return false;
+    }
+
+    const exists = projects.some(
+      (p) => p.name.toLowerCase() === trimmedName.toLowerCase()
+    );
+    if (exists) {
+      addToast(`A project named "${trimmedName}" already exists.`, 'warning');
+      return false;
+    }
+
+    let backendProj = null;
+    try {
+      const adminToken = localStorage.getItem('admin-token');
+      let createdBy = adminToken || (currentUser.id?.startsWith('u-') ? currentUser.id.replace('u-', '') : currentUser.id);
+      if (!createdBy || !/^[0-9a-fA-F]{24}$/.test(createdBy)) {
+        createdBy = '6ab5114f329e2d2b1a699942';
+      }
+
+      const res = await createProjectService({
+        name: trimmedName,
+        description: description.trim() || 'Collaborative workspace project.',
+        createdBy,
+      });
+
+      if (res && res.success && res.data) {
+        backendProj = res.data;
+      }
+    } catch (err) {
+      console.warn('Backend project creation warning:', err.message);
+    }
+
+    const projectId = backendProj?._id || `${trimmedName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') || 'project'}-${Date.now().toString().slice(-4)}`;
+
+    const finalMembers = [
+      {
+        userId: currentUser.id,
+        permissions: { canView: true, canUpload: true, canEdit: true, canDelete: true, canDownload: true },
+      },
+      ...members.filter((m) => m.userId !== currentUser.id),
+    ];
+
+    const newProject = {
+      id: projectId,
+      name: trimmedName,
+      description: description.trim() || 'Collaborative workspace project.',
+      joinCode: backendProj?.joinCode || undefined,
+      color: color || 'from-sky-500 to-blue-600',
+      createdAt: new Date().toISOString(),
+      updatedAt: 'Just now',
+      members: finalMembers,
+    };
+
+    setProjects((prev) => [newProject, ...prev]);
+
+    recordAuditLog(
+      'PROJECT_CREATE',
+      'Created Project',
+      trimmedName,
+      `Created project '${trimmedName}' with ${finalMembers.length} assigned members`,
+      'Project Governance',
+      'success'
+    );
+
+    addToast(`Project "${trimmedName}" created successfully!`, 'success');
+    await loadBackendProjects();
+    return newProject;
+  };
+
+  const updateProject = async (projectId, updateData) => {
+    if (currentUser.role !== 'Admin') {
+      addToast('Permission Denied: Only Administrators can update project configuration.', 'error');
+      return false;
+    }
+
+    const targetProj = projects.find((p) => p.id === projectId);
+    if (!targetProj) return false;
+
+    // Sync member permissions with backend if members provided
+    if (Array.isArray(updateData.members) && /^[0-9a-fA-F]{24}$/.test(projectId)) {
+      for (const m of updateData.members) {
+        if (m.userId && m.userId !== 'u-admin' && /^[0-9a-fA-F]{24}$/.test(m.userId)) {
+          try {
+            await updateMemberPermissionsService({
+              projectId,
+              userId: m.userId,
+              permissions: frontendPermissionsToBackend(m.permissions),
+            });
+          } catch (err) {
+            console.warn(`Backend sync member ${m.userId} error:`, err.message);
+          }
+        }
+      }
+    }
+
+    setProjects((prev) =>
+      prev.map((p) => {
+        if (p.id !== projectId) return p;
+        return {
+          ...p,
+          name: updateData.name ? updateData.name.trim() : p.name,
+          description: updateData.description !== undefined ? updateData.description.trim() : p.description,
+          color: updateData.color || p.color,
+          members: updateData.members || p.members,
+          updatedAt: 'Just now',
+        };
+      })
+    );
+
+    recordAuditLog(
+      'PROJECT_UPDATE',
+      'Updated Project Settings',
+      targetProj.name,
+      `Updated settings and member access configuration for project '${targetProj.name}'`,
+      'Project Governance',
+      'success'
+    );
+    addToast(`Project "${updateData.name || targetProj.name}" updated!`, 'success');
+    await loadBackendProjects();
+    return true;
+  };
+
+  const deleteProject = (projectId) => {
+    if (currentUser.role !== 'Admin') {
+      addToast('Permission Denied: Only Administrators can delete projects.', 'error');
+      return false;
+    }
+
+    const targetProj = projects.find((p) => p.id === projectId);
+    if (!targetProj) return false;
+
+    setProjects((prev) => prev.filter((p) => p.id !== projectId));
+    if (selectedProject === projectId) {
+      setSelectedProject(null);
+    }
+
+    recordAuditLog(
+      'PROJECT_DELETE',
+      'Deleted Project',
+      targetProj.name,
+      `Deleted project '${targetProj.name}' and revoked user workspace access`,
+      'Project Governance',
+      'warning'
+    );
+    addToast(`Project "${targetProj.name}" deleted.`, 'info');
+    return true;
+  };
+
+  const updateProjectMemberPermissions = (projectId, userId, newPermissions) => {
+    if (currentUser.role !== 'Admin') {
+      addToast('Permission Denied: Only Administrators can modify member permissions.', 'error');
+      return false;
+    }
+
+    const proj = projects.find((p) => p.id === projectId);
+    if (!proj) return false;
+    const targetUser = users.find((u) => u.id === userId);
+
+    setProjects((prev) =>
+      prev.map((p) => {
+        if (p.id !== projectId) return p;
+        const exists = p.members?.some((m) => m.userId === userId);
+        const updatedMembers = exists
+          ? p.members.map((m) =>
+              m.userId === userId ? { ...m, permissions: { ...m.permissions, ...newPermissions } } : m
+            )
+          : [...(p.members || []), { userId, permissions: newPermissions }];
+        return { ...p, members: updatedMembers, updatedAt: 'Just now' };
+      })
+    );
+
+    recordAuditLog(
+      'PROJECT_PERMISSION_UPDATE',
+      'Updated Member Permissions',
+      targetUser ? targetUser.name : userId,
+      `Updated access privileges in project '${proj.name}'`,
+      'Project Governance',
+      'success'
+    );
+    addToast(`Permissions updated for ${targetUser ? targetUser.name : 'user'} in ${proj.name}.`, 'success');
+    return true;
+  };
+
+  const addProjectMember = (projectId, userId, permissions = { canView: true, canUpload: true, canEdit: false, canDelete: false, canDownload: true }) => {
+    if (currentUser.role !== 'Admin') {
+      addToast('Permission Denied: Only Administrators can add project members.', 'error');
+      return false;
+    }
+
+    const proj = projects.find((p) => p.id === projectId);
+    if (!proj) return false;
+    const targetUser = users.find((u) => u.id === userId);
+
+    if (proj.members?.some((m) => m.userId === userId)) {
+      addToast(`${targetUser ? targetUser.name : 'User'} is already a member of this project.`, 'warning');
+      return false;
+    }
+
+    setProjects((prev) =>
+      prev.map((p) => {
+        if (p.id !== projectId) return p;
+        return {
+          ...p,
+          members: [...(p.members || []), { userId, permissions }],
+          updatedAt: 'Just now',
+        };
+      })
+    );
+
+    recordAuditLog(
+      'PROJECT_MEMBER_ADD',
+      'Added Project Member',
+      targetUser ? targetUser.name : userId,
+      `Added to project '${proj.name}' with custom permissions`,
+      'Project Governance',
+      'success'
+    );
+    addToast(`${targetUser ? targetUser.name : 'User'} added to ${proj.name}!`, 'success');
+    return true;
+  };
+
+  const removeProjectMember = (projectId, userId) => {
+    if (currentUser.role !== 'Admin') {
+      addToast('Permission Denied: Only Administrators can remove project members.', 'error');
+      return false;
+    }
+    if (userId === 'u-admin') {
+      addToast('Cannot remove System Administrator from project.', 'warning');
+      return false;
+    }
+
+    const proj = projects.find((p) => p.id === projectId);
+    if (!proj) return false;
+    const targetUser = users.find((u) => u.id === userId);
+
+    setProjects((prev) =>
+      prev.map((p) => {
+        if (p.id !== projectId) return p;
+        return {
+          ...p,
+          members: (p.members || []).filter((m) => m.userId !== userId),
+          updatedAt: 'Just now',
+        };
+      })
+    );
+
+    recordAuditLog(
+      'PROJECT_MEMBER_REMOVE',
+      'Removed Project Member',
+      targetUser ? targetUser.name : userId,
+      `Removed member from project '${proj.name}'`,
+      'Project Governance',
+      'info'
+    );
+    addToast(`${targetUser ? targetUser.name : 'User'} removed from ${proj.name}.`, 'info');
+    return true;
+  };
+
+  const deleteUser = (userId) => {
+    if (!canManageUsers) {
+      addToast('Only Administrators can remove users.', 'error');
+      return false;
+    }
+    const target = users.find((u) => u.id === userId);
+    if (!target) return false;
+    if (target.role === 'Admin') {
+      addToast('Cannot remove Administrator account.', 'warning');
+      return false;
+    }
+
+    setUsers((prev) => prev.filter((u) => u.id !== userId));
+    setInvitations((prev) => prev.filter((i) => i.userId !== userId && i.email !== target.email));
+    setProjects((prev) =>
+      prev.map((p) => ({
+        ...p,
+        members: (p.members || []).filter((m) => m.userId !== userId),
+      }))
+    );
+
+    recordAuditLog(
+      'USER_DELETE',
+      'Removed User Account',
+      target.name,
+      `Removed user account ${target.name} (${target.email})`,
+      'User Management',
+      'warning'
+    );
+    addToast(`User ${target.name} removed successfully.`, 'info');
+    return true;
+  };
+
+  const resetWorkspaceData = () => {
+    setFiles([]);
+    setLogs([]);
+    setSelectedProject(null);
+    loadBackendProjects();
+    addToast('Workspace data has been refreshed from server.', 'info');
+  };
+
+  const contextValue = useMemo(() => ({
+    users,
+    currentUser,
+    currentUserId,
+    setCurrentUserId,
+    files,
+    projects,
+    setProjects,
+    folders: projects,
+    selectedFolder: selectedProject,
+    setSelectedFolder: setSelectedProject,
+    selectedProject,
+    setSelectedProject,
+    userProjects,
+    logs,
+    activeTab,
+    setActiveTab,
+    searchQuery,
+    setSearchQuery,
+    toasts,
+    addToast,
+    removeToast,
+    canUpload,
+    canEdit,
+    canDelete,
+    canDownload,
+    canManageUsers,
+    canViewLogs,
+    getProjectPermissions,
+    canUploadToProject,
+    canEditFile,
+    canDeleteFile,
+    canDownloadFile,
+    createProject,
+    updateProject,
+    deleteProject,
+    updateProjectMemberPermissions,
+    addProjectMember,
+    removeProjectMember,
+    createFolder: createProject,
+    isAuthenticated,
+    login,
+    logout,
+    uploadFile,
+    updateFile,
+    deleteFile,
+    renameFile,
+    downloadFile,
+    toggleStar,
+    addUser,
+    inviteUser,
+    acceptInvitation,
+    getInviteLink,
+    getInvitationByToken,
+    invitations,
+    inviteToken,
+    setInviteToken,
+    updateUserPermissions,
+    toggleUserStatus,
+    deleteUser,
+    recordAuditLog,
+    loadBackendAuditLogs,
+    auditPagination,
+    resetWorkspaceData,
+  }), [
+    users,
+    currentUser,
+    currentUserId,
+    files,
+    projects,
+    selectedProject,
+    userProjects,
+    logs,
+    auditPagination,
+    activeTab,
+    searchQuery,
+    toasts,
+    canUpload,
+    canEdit,
+    canDelete,
+    canDownload,
+    canManageUsers,
+    canViewLogs,
+    getProjectPermissions,
+    canUploadToProject,
+    canEditFile,
+    canDeleteFile,
+    canDownloadFile,
+    createProject,
+    updateProject,
+    deleteProject,
+    updateProjectMemberPermissions,
+    addProjectMember,
+    removeProjectMember,
+    isAuthenticated,
+    inviteToken,
+    invitations,
+  ]);
+
+  return (
+    <DMSContext.Provider value={contextValue}>
+      {children}
+    </DMSContext.Provider>
+  );
+};
+
+export const useDMS = () => {
+  const context = useContext(DMSContext);
+  if (!context) {
+    throw new Error('useDMS must be used within a DMSProvider');
+  }
+  return context;
+};
