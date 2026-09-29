@@ -37,7 +37,7 @@ export const DeleteConfirmModal = ({ file, isOpen, onClose }) => {
 
         <div className="px-6 py-3">
           <div className="p-3 bg-amber-50/70 border border-amber-200/80 rounded-xl text-[11px] text-amber-800">
-            <strong>Audit Record Notice:</strong> This action will be permanently recorded under <strong>{currentUser.name}</strong>'s activity trail.
+            <strong>Audit Record Notice:</strong> This action will be permanently recorded under <strong>{currentUser.name}</strong>.
           </div>
         </div>
 

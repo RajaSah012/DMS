@@ -79,7 +79,7 @@ export const EditFileModal = ({ file, isOpen, onClose }) => {
     }
   };
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
     if (!name.trim()) return;
 
@@ -97,7 +97,7 @@ export const EditFileModal = ({ file, isOpen, onClose }) => {
       updatePayload.type = newFileType;
     }
 
-    const success = updateFile(file.id, updatePayload);
+    const success = await updateFile(file.id, updatePayload);
     if (success) {
       onClose();
     }

@@ -326,9 +326,9 @@ export const UserManagement = () => {
                         </button>
                         {!isAdmin && (
                           <button
-                            onClick={() => {
+                            onClick={async () => {
                               if (window.confirm(`Are you sure you want to remove user "${user.name}"?`)) {
-                                deleteUser(user.id);
+                                await deleteUser(user.id);
                               }
                             }}
                             className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"

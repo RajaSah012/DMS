@@ -101,3 +101,22 @@ export const deleteProjectService = async (projectId) => {
   }
 };
 
+/**
+ * Update project details (name, description, status) in the backend database
+ * Calls PUT /projects/:projectId
+ * @param {string} projectId
+ * @param {{ name?: string, title?: string, description?: string, status?: string, userId?: string }} data
+ * @returns {Promise<{ success: boolean, message: string, data: Object }>}
+ */
+export const updateProjectDetailsService = async (projectId, data) => {
+  try {
+    const response = await API.put(`/projects/${projectId}`, data, {
+      headers: data?.userId ? { userid: data.userId } : {},
+    });
+    return response.data;
+  } catch (error) {
+    console.error(`Update project details API error for ${projectId}:`, error);
+    throw error;
+  }
+};
+

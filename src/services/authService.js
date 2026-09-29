@@ -48,3 +48,42 @@ export const registerUserService = async (data) => {
     throw error;
   }
 };
+
+/**
+ * Fetch all registered users from backend database (Paginated)
+ * Calls GET /users
+ * @param {number} [page=1]
+ * @param {number} [limit=100]
+ * @returns {Promise<{ success: boolean, data: Array, pagination?: Object }>}
+ */
+export const getAllUsersService = async (page = 1, limit = 100) => {
+  try {
+    const response = await API.get("/users", {
+      params: { page, limit }
+    });
+    return response.data;
+  } catch (error) {
+    console.error("Fetch all users API error:", error);
+    throw error;
+  }
+};
+
+/**
+ * Delete a user from the backend database permanently
+ * Calls DELETE /users/:id
+ * @param {string} userId
+ * @param {string} [performingUserId]
+ * @returns {Promise<{ success: boolean, message: string, data?: Object }>}
+ */
+export const deleteUserService = async (userId, performingUserId = null) => {
+  try {
+    const response = await API.delete(`/users/${userId}`, {
+      params: performingUserId ? { performingUserId } : {},
+      data: performingUserId ? { performingUserId } : {}
+    });
+    return response.data;
+  } catch (error) {
+    console.error(`Delete user API error for ${userId}:`, error);
+    throw error;
+  }
+};

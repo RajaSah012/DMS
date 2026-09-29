@@ -88,6 +88,42 @@ export const deleteDocumentService = async (fileId, projectId, userId) => {
 };
 
 /**
+ * Rename a document in the backend database
+ * Calls PUT /files/:fileId
+ * Passes { name, originalName, projectId, userId } in body and headers
+ * @param {string} fileId
+ * @param {string} newName
+ * @param {string} [projectId]
+ * @param {string} [userId]
+ * @returns {Promise<{ success: boolean, message: string, data: Object }>}
+ */
+export const renameDocumentService = async (fileId, newName, projectId, userId) => {
+  try {
+    const payload = {
+      name: newName,
+      originalName: newName,
+      newName,
+      projectId,
+      userId,
+    };
+    const response = await API.put(`/files/${fileId}`, payload, {
+      headers: {
+        "Content-Type": "application/json",
+        userid: userId,
+      },
+      params: {
+        projectId,
+        userId,
+      },
+    });
+    return response.data;
+  } catch (error) {
+    console.error(`Rename document API error for file ${fileId}:`, error);
+    throw error;
+  }
+};
+
+/**
  * Resolve full URL for static file download from backend server
  * @param {string} fileUrl - e.g. "/uploads/file-123.pdf"
  * @returns {string} - Full accessible URL

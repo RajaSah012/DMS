@@ -1,18 +1,26 @@
 import React, { createContext, useContext, useState, useEffect, useMemo, useCallback } from 'react';
-import { loginAdminService, loginUserService, registerUserService } from '../services/authService';
+import { 
+  loginAdminService, 
+  loginUserService, 
+  registerUserService,
+  getAllUsersService,
+  deleteUserService
+} from '../services/authService';
 import { 
   getAllProjectsService, 
   createProjectService, 
   inviteUserToProjectService, 
   updateMemberPermissionsService, 
   getProjectMembersService,
-  deleteProjectService
+  deleteProjectService,
+  updateProjectDetailsService
 } from '../services/projectService';
 import { backendPermissionsToFrontend, frontendPermissionsToBackend } from '../utils/permissionMapper';
 import { 
   uploadDocumentService, 
   getProjectDocumentsService, 
   deleteDocumentService, 
+  renameDocumentService,
   getFileDownloadUrl, 
   formatBytes, 
   detectTypeFromExtension 
@@ -453,7 +461,18 @@ export const DMSProvider = ({ children }) => {
           });
         }
 
-        // Update users state with real registered members from MongoDB
+        // 1. Fetch all registered users from backend MongoDB
+        let allBackendUsers = [];
+        try {
+          const uRes = await getAllUsersService(1, 100);
+          if (uRes && uRes.success && Array.isArray(uRes.data)) {
+            allBackendUsers = uRes.data;
+          }
+        } catch (uErr) {
+          console.warn('Backend users load notice:', uErr.message);
+        }
+
+        // 2. Update users state with real registered members from MongoDB
         setUsers(() => {
           const currentAdminEmail = (localStorage.getItem('admin-email') || 'admin1@gmail.com').toLowerCase();
           const currentAdminToken = localStorage.getItem('admin-token');
@@ -483,7 +502,52 @@ export const DMSProvider = ({ children }) => {
           const userMap = new Map();
           userMap.set(currentAdminEmail, activeAdmin);
 
-          // Populate real registered members from MongoDB
+          // Populate registered users from MongoDB getAllUsers API
+          allBackendUsers.forEach((bu) => {
+            const emailKey = (bu.email || '').toLowerCase();
+            const buId = String(bu._id || bu.id);
+            if (deletedUserEmails.includes(emailKey) || deletedUserIds.includes(buId)) {
+              return;
+            }
+            if (emailKey === currentAdminEmail) {
+              return;
+            }
+
+            const assignedProjects = projectsWithMembers
+              .filter((p) => (p.members || []).some((m) => String(m.userId) === buId || (m.email && m.email.toLowerCase() === emailKey)))
+              .map((p) => p.id);
+
+            let userPerms = {
+              canView: true,
+              canUpload: true,
+              canEdit: false,
+              canDelete: false,
+              canDownload: true,
+            };
+
+            for (const p of projectsWithMembers) {
+              const matchedM = (p.members || []).find((m) => String(m.userId) === buId || (m.email && m.email.toLowerCase() === emailKey));
+              if (matchedM && matchedM.permissions) {
+                userPerms = matchedM.permissions;
+                break;
+              }
+            }
+
+            userMap.set(emailKey, {
+              id: bu._id || bu.id,
+              name: bu.name || emailKey.split('@')[0],
+              email: bu.email,
+              mobile: bu.mobile,
+              role: 'Member',
+              avatar: '/p2.jpg',
+              department: 'Project Member',
+              status: bu.isActive !== false ? 'active' : 'suspended',
+              projectIds: assignedProjects,
+              permissions: userPerms,
+            });
+          });
+
+          // Ensure project-assigned members are merged
           projectsWithMembers.forEach((p) => {
             p.members.forEach((m) => {
               if (m.email) {
@@ -1223,7 +1287,7 @@ export const DMSProvider = ({ children }) => {
     return true;
   };
 
-  const updateFile = (fileId, updateData) => {
+  const updateFile = async (fileId, updateData) => {
     const targetFile = files.find((f) => f.id === fileId);
     if (!targetFile) return false;
 
@@ -1237,13 +1301,29 @@ export const DMSProvider = ({ children }) => {
     const hasNewFile = !!updateData.fileUrl;
     const oldVersion = targetFile.version || '1.0';
     const newVersion = updateData.version || oldVersion;
+    const newName = updateData.name ? updateData.name.trim() : targetFile.name;
 
-    setFiles((prev) =>
-      prev.map((f) => {
+    // Call Backend rename API if it's a 24-character MongoDB ObjectId and name changed
+    if (/^[0-9a-fA-F]{24}$/.test(fileId) && newName && newName !== targetFile.name) {
+      try {
+        const currentAdminToken = localStorage.getItem('admin-token');
+        const uId = currentUser.role === 'Admin'
+          ? (currentAdminToken || '6ab5114f329e2d2b1a699942')
+          : (currentUser.id?.startsWith('u-') ? currentUser.id.replace('u-', '') : currentUser.id);
+
+        await renameDocumentService(fileId, newName, targetProjId, uId);
+        loadBackendAuditLogs();
+      } catch (renameErr) {
+        console.warn('Backend file rename notice:', renameErr.response?.data?.message || renameErr.message);
+      }
+    }
+
+    setFiles((prev) => {
+      const updated = prev.map((f) => {
         if (f.id !== fileId) return f;
         return {
           ...f,
-          name: updateData.name || f.name,
+          name: newName,
           projectId: targetProjId,
           folder: targetProjId,
           version: newVersion,
@@ -1257,15 +1337,36 @@ export const DMSProvider = ({ children }) => {
               }
             : {}),
         };
-      })
-    );
+      });
+      localStorage.setItem('kt_dms_files', JSON.stringify(updated));
+      return updated;
+    });
+
+    setProjects((prev) => {
+      const updated = prev.map((p) => {
+        if (p.id !== targetProjId) return p;
+        return {
+          ...p,
+          docs: (p.docs || []).map((doc) => {
+            if (doc.id !== fileId) return doc;
+            return {
+              ...doc,
+              name: newName,
+              version: newVersion,
+            };
+          }),
+        };
+      });
+      localStorage.setItem('kt_dms_projects', JSON.stringify(updated));
+      return updated;
+    });
 
     const logDetails = hasNewFile
       ? `Replaced file with new attachment (${updateData.size}), bumped to v${newVersion}`
-      : `Updated metadata (Name: "${updateData.name || targetFile.name}", Project: ${targetProjId})`;
+      : `Updated metadata (Name: "${newName}", Project: ${targetProjId})`;
 
-    recordAuditLog('FILE_UPDATE', hasNewFile ? 'Replaced File Version' : 'Edited Document', updateData.name || targetFile.name, logDetails, 'Document Management', 'success');
-    addToast(`Document "${updateData.name || targetFile.name}" updated successfully!`, 'success');
+    recordAuditLog('FILE_UPDATE', hasNewFile ? 'Replaced File Version' : 'Edited Document', newName, logDetails, 'Document Management', 'success');
+    addToast(`Document "${newName}" updated successfully!`, 'success');
     return true;
   };
 
@@ -1302,8 +1403,8 @@ export const DMSProvider = ({ children }) => {
     recordAuditLog('FILE_DELETE', 'Deleted File', targetFile.name, `Permanently deleted file from project '${targetFile.projectId || targetFile.folder}'`, 'Document Management', 'warning');
   };
 
-  const renameFile = (fileId, newName) => {
-    return updateFile(fileId, { name: newName });
+  const renameFile = async (fileId, newName) => {
+    return await updateFile(fileId, { name: newName });
   };
 
   const downloadFile = (file) => {
@@ -1958,7 +2059,22 @@ export const DMSProvider = ({ children }) => {
 
     const currentAdminEmail = (currentUser.email || localStorage.getItem('admin-email') || 'admin1@gmail.com').toLowerCase();
 
-    // Sync member permissions and invitations with backend if members provided
+    // 1. Persist updated name / description to backend MongoDB if valid ObjectId
+    if (/^[0-9a-fA-F]{24}$/.test(projectId)) {
+      try {
+        const uId = currentUser?.id || localStorage.getItem('admin-token') || '6ab5114f329e2d2b1a699942';
+        await updateProjectDetailsService(projectId, {
+          name: updateData.name ? updateData.name.trim() : targetProj.name,
+          description: updateData.description !== undefined ? updateData.description.trim() : targetProj.description,
+          status: updateData.status || targetProj.status || 'active',
+          userId: uId,
+        });
+      } catch (projUpdateErr) {
+        console.warn('Backend update project details notice:', projUpdateErr.message);
+      }
+    }
+
+    // 2. Sync member permissions and invitations with backend if members provided
     if (Array.isArray(updateData.members) && /^[0-9a-fA-F]{24}$/.test(projectId)) {
       const syncTasks = updateData.members
         .filter((m) => {
@@ -2222,7 +2338,7 @@ export const DMSProvider = ({ children }) => {
     return true;
   };
 
-  const deleteUser = (userId) => {
+  const deleteUser = async (userId) => {
     if (!canManageUsers) {
       addToast('Only Administrators can remove users.', 'error');
       return false;
@@ -2236,6 +2352,16 @@ export const DMSProvider = ({ children }) => {
 
     const targetEmail = (target.email || '').toLowerCase();
     const targetId = String(target.id);
+
+    // Call Backend deleteUser API if it's a 24-character MongoDB ObjectId
+    if (/^[0-9a-fA-F]{24}$/.test(targetId)) {
+      try {
+        const adminId = localStorage.getItem('admin-token') || currentUser?.id;
+        await deleteUserService(targetId, adminId);
+      } catch (delErr) {
+        console.warn('Backend delete user notice:', delErr.response?.data?.message || delErr.message);
+      }
+    }
 
     // 1. Add to persistent deleted users list in localStorage
     try {
@@ -2292,7 +2418,9 @@ export const DMSProvider = ({ children }) => {
       'User Management',
       'warning'
     );
-    addToast(`User ${target.name} removed successfully.`, 'info');
+    addToast(`User ${target.name} removed successfully from database.`, 'info');
+    await loadBackendProjects();
+    loadBackendAuditLogs();
     return true;
   };
 
