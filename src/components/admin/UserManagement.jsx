@@ -119,7 +119,7 @@ export const UserManagement = () => {
         <div className="p-2 sm:p-4 rounded-xl sm:rounded-2xl bg-white border border-slate-200 shadow-xs flex flex-col sm:flex-row items-center sm:items-center justify-between text-center sm:text-left gap-1">
           <div>
             <span className="text-[10px] sm:text-xs text-slate-400 font-medium block truncate">Registered</span>
-            <p className="text-sm sm:text-2xl font-black text-[#0A2540] mt-0.5">{users.length}</p>
+            <p className="text-sm sm:text-2xl font-black text-[#0A2540] mt-0.5">{displayedUsers.length}</p>
           </div>
           <div className="w-7 h-7 sm:w-10 sm:h-10 rounded-lg sm:rounded-xl bg-sky-50 text-[#00A3E0] flex items-center justify-center font-bold shrink-0">
             <Users className="w-3.5 h-3.5 sm:w-5 sm:h-5" />

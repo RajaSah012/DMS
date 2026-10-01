@@ -6,25 +6,42 @@ import { useScrollLock } from '../hooks/useScrollLock';
 
 export const UploadModal = ({ isOpen, onClose, onOpenCreateProject }) => {
   useScrollLock(isOpen);
-  const { uploadFile, projects, userProjects, canUploadToProject, createProject, currentUser } = useDMS();
+  const { 
+    uploadFile, 
+    projects, 
+    userProjects, 
+    canUploadToProject, 
+    createProject, 
+    currentUser,
+    folders,
+    currentFolderId,
+    selectedProject 
+  } = useDMS();
   const fileInputRef = useRef(null);
 
   const [selectedFileObj, setSelectedFileObj] = useState(null);
   const [fileName, setFileName] = useState('');
   const [projectId, setProjectId] = useState(() => userProjects[0]?.id || '');
+  const [folderId, setFolderId] = useState('');
   const [fileType, setFileType] = useState('pdf');
   const [fileSize, setFileSize] = useState('');
   const [fileSizeBytes, setFileSizeBytes] = useState(0);
   const [fileUrl, setFileUrl] = useState(null);
+  const [externalUrl, setExternalUrl] = useState('');
   const [isDragging, setIsDragging] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [progress, setProgress] = useState(0);
 
   useEffect(() => {
-    if (userProjects.length > 0 && !userProjects.some((p) => p.id === projectId)) {
-      setProjectId(userProjects[0].id);
+    if (isOpen) {
+      if (selectedProject && userProjects.some((p) => p.id === selectedProject)) {
+        setProjectId(selectedProject);
+      } else if (userProjects.length > 0 && !userProjects.some((p) => p.id === projectId)) {
+        setProjectId(userProjects[0].id);
+      }
+      setFolderId(currentFolderId || '');
     }
-  }, [userProjects, projectId]);
+  }, [isOpen, selectedProject, currentFolderId]);
 
   if (!isOpen) return null;
 
@@ -78,6 +95,7 @@ export const UploadModal = ({ isOpen, onClose, onOpenCreateProject }) => {
     setFileName('');
     setFileSize('');
     setFileUrl(null);
+    setExternalUrl('');
     setProgress(0);
     setUploading(false);
     onClose();
@@ -96,10 +114,12 @@ export const UploadModal = ({ isOpen, onClose, onOpenCreateProject }) => {
         type: fileType,
         projectId: projectId,
         folder: projectId,
+        folderId: folderId || null,
         size: fileSize || '3.2 MB',
         sizeBytes: fileSizeBytes || 3355443,
         fileUrl: fileUrl,
         fileObj: selectedFileObj,
+        externalUrl: externalUrl.trim() || null,
       });
 
       setProgress(100);
@@ -224,11 +244,57 @@ export const UploadModal = ({ isOpen, onClose, onOpenCreateProject }) => {
             </label>
             <CustomSelect
               value={projectId}
-              onChange={(val) => setProjectId(val)}
+              onChange={(val) => {
+                setProjectId(val);
+                setFolderId('');
+              }}
               options={userProjects
                 .filter((p) => canUploadToProject(p.id))
                 .map((p) => ({ value: p.id, label: p.name }))}
             />
+          </div>
+
+          {folders.filter((f) => f.projectId === projectId).length > 0 && (
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <label className="block text-xs font-bold text-slate-700">
+                  Target Subfolder
+                </label>
+                <span className="text-[10px] text-slate-400 font-normal">Optional</span>
+              </div>
+              <CustomSelect
+                value={folderId}
+                onChange={(val) => setFolderId(val)}
+                options={[
+                  { value: '', label: '📁 Root / Top Level (No Subfolder)' },
+                  ...folders
+                    .filter((f) => f.projectId === projectId)
+                    .map((f) => ({
+                      value: f.id,
+                      label: `📁 ${f.name}${f.parentFolderId ? ' (Nested)' : ''}`
+                    }))
+                ]}
+              />
+            </div>
+          )}
+
+          <div>
+            <div className="flex items-center justify-between mb-1">
+              <label className="block text-xs font-bold text-slate-700">
+                Reference / External Link
+              </label>
+              <span className="text-[10px] text-slate-400 font-normal">Optional</span>
+            </div>
+            <input
+              type="url"
+              placeholder="https://drive.google.com/... or https://figma.com/..."
+              value={externalUrl}
+              onChange={(e) => setExternalUrl(e.target.value)}
+              className="w-full px-3.5 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:outline-hidden focus:ring-2 focus:ring-[#00A3E0]/30 focus:border-[#00A3E0] text-slate-800"
+            />
+            <p className="text-[10px] text-slate-400 mt-1">
+              Attach an optional cloud link, reference URL, or related documentation.
+            </p>
           </div>
 
           {uploading && (

@@ -105,11 +105,7 @@ export const Navbar = ({ onOpenUpload, onToggleMobileMenu }) => {
               <span className="hidden md:inline font-bold text-[#0284C7] truncate max-w-[90px]">
                 {currentUser.name}
               </span>
-              {currentUser.role === 'Admin' && (
-                <span className="hidden sm:inline-block px-1.5 py-0.5 rounded text-[10px] font-bold bg-[#0A2540] text-white">
-                  Admin
-                </span>
-              )}
+              
               <ChevronDown className="w-3 h-3 text-slate-400 hidden sm:inline" />
             </button>
 

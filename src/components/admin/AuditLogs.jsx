@@ -30,6 +30,21 @@ export const AuditLogs = () => {
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
 
+  // Helper to format details and replace any raw project IDs with Project Names
+  const formatLogDetails = (text) => {
+    if (!text || typeof text !== 'string') return text || '—';
+    let formatted = text;
+    projects.forEach((p) => {
+      if (p.id && p.name && formatted.includes(p.id)) {
+        formatted = formatted.replaceAll(p.id, p.name);
+      }
+      if (p._id && p.name && formatted.includes(p._id)) {
+        formatted = formatted.replaceAll(p._id, p.name);
+      }
+    });
+    return formatted;
+  };
+
   useEffect(() => {
     if (loadBackendAuditLogs) {
       loadBackendAuditLogs(1, 100);
@@ -98,11 +113,13 @@ export const AuditLogs = () => {
       // 2. Search Query Filter
       if (logSearch) {
         const q = logSearch.toLowerCase();
+        const formattedDet = formatLogDetails(log.details);
         const match =
           (log.userName && log.userName.toLowerCase().includes(q)) ||
           (log.actionLabel && log.actionLabel.toLowerCase().includes(q)) ||
           (log.target && log.target.toLowerCase().includes(q)) ||
-          (log.details && log.details.toLowerCase().includes(q));
+          (log.details && log.details.toLowerCase().includes(q)) ||
+          (formattedDet && formattedDet.toLowerCase().includes(q));
         if (!match) return false;
       }
       return true;
@@ -196,7 +213,7 @@ export const AuditLogs = () => {
         l.userName,
         l.actionLabel,
         l.target,
-        l.details,
+        formatLogDetails(l.details),
       ];
     });
 
@@ -365,7 +382,7 @@ export const AuditLogs = () => {
                       </td>
 
                       <td className="py-3.5 pr-6 pl-3 text-slate-500 max-w-md">
-                        {log.details}
+                        {formatLogDetails(log.details)}
                       </td>
                     </tr>
                   );

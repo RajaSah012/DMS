@@ -15,17 +15,21 @@ import {
   User,
   ShieldAlert,
   ChevronLeft,
-  ChevronRight
+  ChevronRight,
+  ExternalLink,
+  Share2
 } from 'lucide-react';
 import { useDMS } from '../context/DMSContext';
 
-export const FileTable = ({ onPreview, onEdit, onDelete }) => {
+export const FileTable = ({ onPreview, onEdit, onDelete, onShare }) => {
   const { 
     files, 
     projects,
     userProjects,
     searchQuery, 
     selectedProject, 
+    folders,
+    currentFolderId,
     activeTab, 
     canUpload,
     canEdit, 
@@ -105,16 +109,20 @@ export const FileTable = ({ onPreview, onEdit, onDelete }) => {
         return false;
       }
 
+      if (selectedProject && currentFolderId) {
+        if (file.folderId !== currentFolderId) return false;
+      }
+
       return true;
     });
-  }, [files, searchQuery, selectedProject, activeTab, userProjects, projects, currentUser]);
+  }, [files, searchQuery, selectedProject, currentFolderId, activeTab, userProjects, projects, currentUser]);
 
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [searchQuery, selectedProject]);
+  }, [searchQuery, selectedProject, currentFolderId]);
 
   const totalPages = Math.max(1, Math.ceil(filteredFiles.length / pageSize));
   const paginatedFiles = useMemo(() => {
@@ -123,6 +131,7 @@ export const FileTable = ({ onPreview, onEdit, onDelete }) => {
   }, [filteredFiles, currentPage, pageSize]);
 
   const activeProjectObj = selectedProject ? projects.find((p) => p.id === selectedProject) : null;
+  const activeFolderObj = currentFolderId ? folders.find((f) => f.id === currentFolderId) : null;
   const activePrivileges = selectedProject
     ? getProjectPermissions(selectedProject)
     : { canUpload, canEdit, canDelete, canDownload };
@@ -132,12 +141,14 @@ export const FileTable = ({ onPreview, onEdit, onDelete }) => {
       <div className="p-4 sm:px-6 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-slate-50/50">
         <div>
           <h3 className="text-sm font-bold text-[#0A2540]">
-            {activeProjectObj 
+            {activeFolderObj
+              ? `📁 Folder: ${activeFolderObj.name}`
+              : activeProjectObj 
               ? `Project: ${activeProjectObj.name}` 
               : 'All Project Documents'}
           </h3>
           <p className="text-xs text-slate-500">
-            Showing {filteredFiles.length} documents
+            Showing {filteredFiles.length} documents {activeFolderObj ? `inside "${activeFolderObj.name}"` : ''}
           </p>
         </div>
 
@@ -187,12 +198,27 @@ export const FileTable = ({ onPreview, onEdit, onDelete }) => {
                   <div className="flex items-start gap-3">
                     {getFileIcon(file.type)}
                     <div className="flex-1 min-w-0">
-                      <button
-                        onClick={() => onPreview(file)}
-                        className="font-bold text-xs text-[#0A2540] hover:text-[#00A3E0] transition-colors truncate block text-left w-full cursor-pointer"
-                      >
-                        {file.name}
-                      </button>
+                      <div className="flex items-center gap-1.5 w-full">
+                        <button
+                          onClick={() => onPreview(file)}
+                          className="font-bold text-xs text-[#0A2540] hover:text-[#00A3E0] transition-colors truncate block text-left flex-1 cursor-pointer"
+                        >
+                          {file.name}
+                        </button>
+                        {file.externalUrl && (
+                          <a
+                            href={file.externalUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            onClick={(e) => e.stopPropagation()}
+                            className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-sky-50 text-[#00A3E0] text-[10px] font-bold border border-sky-200 shrink-0 hover:bg-sky-100"
+                            title={`Open reference: ${file.externalUrl}`}
+                          >
+                            <ExternalLink className="w-3 h-3" />
+                            <span>Link</span>
+                          </a>
+                        )}
+                      </div>
                       <div className="flex flex-wrap items-center gap-1.5 mt-1">
                         <span className="px-2 py-0.5 rounded-md bg-sky-50 text-[#0284C7] font-semibold text-[10px] border border-sky-100 truncate max-w-[130px]">
                           {fileProj ? fileProj.name : (file.projectId || file.folder)}
@@ -236,6 +262,13 @@ export const FileTable = ({ onPreview, onEdit, onDelete }) => {
                         title="Download"
                       >
                         <Download className="w-4 h-4" />
+                      </button>
+                      <button
+                        onClick={() => onShare && onShare(file)}
+                        className="p-1.5 rounded-lg text-slate-500 hover:text-[#00A3E0] hover:bg-sky-50 transition-colors cursor-pointer"
+                        title="Share File (Expiring & One-Time Link)"
+                      >
+                        <Share2 className="w-4 h-4" />
                       </button>
                       <button
                         onClick={() => onEdit(file)}
@@ -293,12 +326,27 @@ export const FileTable = ({ onPreview, onEdit, onDelete }) => {
                         <div className="flex items-center gap-3">
                           {getFileIcon(file.type)}
                           <div className="max-w-xs md:max-w-md truncate">
-                            <button
-                              onClick={() => onPreview(file)}
-                              className="font-semibold text-[#0A2540] hover:text-[#00A3E0] transition-colors truncate block text-left cursor-pointer"
-                            >
-                              {file.name}
-                            </button>
+                            <div className="flex items-center gap-2">
+                              <button
+                                onClick={() => onPreview(file)}
+                                className="font-semibold text-[#0A2540] hover:text-[#00A3E0] transition-colors truncate block text-left cursor-pointer"
+                              >
+                                {file.name}
+                              </button>
+                              {file.externalUrl && (
+                                <a
+                                  href={file.externalUrl}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  onClick={(e) => e.stopPropagation()}
+                                  className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-sky-50 text-[#00A3E0] hover:bg-sky-100 text-[10px] font-bold border border-sky-200 shrink-0 transition-colors"
+                                  title={`Open reference: ${file.externalUrl}`}
+                                >
+                                  <ExternalLink className="w-3 h-3" />
+                                  <span>Link</span>
+                                </a>
+                              )}
+                            </div>
                           </div>
                         </div>
                       </td>
@@ -353,6 +401,14 @@ export const FileTable = ({ onPreview, onEdit, onDelete }) => {
                             title={fileCanDownload ? 'Download File' : 'Download Restricted'}
                           >
                             <Download className="w-4 h-4" />
+                          </button>
+
+                          <button
+                            onClick={() => onShare && onShare(file)}
+                            className="p-1.5 rounded-lg text-slate-500 hover:text-[#00A3E0] hover:bg-sky-50 transition-colors cursor-pointer"
+                            title="Share File (Expiring & One-Time Link)"
+                          >
+                            <Share2 className="w-4 h-4" />
                           </button>
 
                           <button

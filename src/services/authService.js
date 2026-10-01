@@ -53,10 +53,10 @@ export const registerUserService = async (data) => {
  * Fetch all registered users from backend database (Paginated)
  * Calls GET /users
  * @param {number} [page=1]
- * @param {number} [limit=100]
+ * @param {number} [limit=500]
  * @returns {Promise<{ success: boolean, data: Array, pagination?: Object }>}
  */
-export const getAllUsersService = async (page = 1, limit = 100) => {
+export const getAllUsersService = async (page = 1, limit = 500) => {
   try {
     const response = await API.get("/users", {
       params: { page, limit }
@@ -87,3 +87,54 @@ export const deleteUserService = async (userId, performingUserId = null) => {
     throw error;
   }
 };
+
+/**
+ * Send email verification OTP
+ * Calls POST /users/send-otp
+ * @param {string} email
+ * @returns {Promise<{ success: boolean, message: string }>}
+ */
+export const sendOtpService = async (email) => {
+  try {
+    const response = await API.post("/users/send-otp", { email });
+    return response.data;
+  } catch (error) {
+    console.error("Send OTP API error:", error);
+    throw error;
+  }
+};
+
+/**
+ * Verify email verification OTP
+ * Calls POST /users/verify-otp
+ * @param {string} email
+ * @param {string} otp
+ * @returns {Promise<{ success: boolean, message: string }>}
+ */
+export const verifyOtpService = async (email, otp) => {
+  try {
+    const response = await API.post("/users/verify-otp", { email, otp });
+    return response.data;
+  } catch (error) {
+    console.error("Verify OTP API error:", error);
+    throw error;
+  }
+};
+
+/**
+ * Send workspace joining link to user's email
+ * Calls POST /users/send-invite-email
+ * @param {{ email: string, inviteLink: string, projectName?: string }} data
+ * @returns {Promise<{ success: boolean, message: string }>}
+ */
+export const sendInviteEmailService = async (data) => {
+  try {
+    const response = await API.post("/users/send-invite-email", data);
+    return response.data;
+  } catch (error) {
+    console.error("Send invite email API error:", error);
+    throw error;
+  }
+};
+
+

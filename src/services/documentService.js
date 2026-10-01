@@ -169,3 +169,36 @@ export const detectTypeFromExtension = (name) => {
   return "doc";
 };
 
+/**
+ * Generate a secure expiring or one-time share link for a file
+ * Calls POST /files/share-link
+ * @param {{ fileId: string, expiresInHours?: number|null, isOneTime?: boolean, userId?: string }} data
+ * @returns {Promise<{ success: boolean, message: string, data: { token: string, shareUrl: string, expiresAt: string|null, isOneTime: boolean } }>}
+ */
+export const createShareLinkService = async (data) => {
+  try {
+    const response = await API.post("/files/share-link", data);
+    return response.data;
+  } catch (error) {
+    console.error("Create share link API error:", error);
+    throw error;
+  }
+};
+
+/**
+ * Fetch and access a shared file using secure token
+ * Calls GET /files/shared/:token
+ * @param {string} token
+ * @returns {Promise<{ success: boolean, data: { fileName: string, size: number, mimeType: string, fileUrl: string, externalUrl?: string } }>}
+ */
+export const getSharedFileService = async (token) => {
+  try {
+    const response = await API.get(`/files/shared/${token}`);
+    return response.data;
+  } catch (error) {
+    console.error(`Get shared file API error for token ${token}:`, error);
+    throw error;
+  }
+};
+
+

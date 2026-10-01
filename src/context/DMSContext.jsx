@@ -4,7 +4,9 @@ import {
   loginUserService, 
   registerUserService,
   getAllUsersService,
-  deleteUserService
+  deleteUserService,
+  sendOtpService,
+  verifyOtpService
 } from '../services/authService';
 import { 
   getAllProjectsService, 
@@ -21,10 +23,16 @@ import {
   getProjectDocumentsService, 
   deleteDocumentService, 
   renameDocumentService,
+  createShareLinkService,
   getFileDownloadUrl, 
   formatBytes, 
   detectTypeFromExtension 
 } from '../services/documentService';
+import { 
+  createFolderService, 
+  getProjectFoldersService, 
+  deleteFolderService 
+} from '../services/folderService';
 import { getAuditLogsService } from '../services/auditService';
 
 const DMSContext = createContext();
@@ -178,6 +186,24 @@ export const DMSProvider = ({ children }) => {
   useEffect(() => {
     localStorage.setItem('kt_dms_projects', JSON.stringify(projects));
   }, [projects]);
+
+  const [folders, setFolders] = useState(() => {
+    try {
+      const saved = localStorage.getItem('kt_dms_folders');
+      if (saved) return JSON.parse(saved);
+    } catch {}
+    return [];
+  });
+
+  const [currentFolderId, setCurrentFolderId] = useState(null);
+
+  useEffect(() => {
+    localStorage.setItem('kt_dms_folders', JSON.stringify(folders));
+  }, [folders]);
+
+  useEffect(() => {
+    setCurrentFolderId(null);
+  }, [selectedProject]);
 
   useEffect(() => {
     localStorage.setItem('kt_dms_logs', JSON.stringify(logs));
@@ -426,6 +452,7 @@ export const DMSProvider = ({ children }) => {
                     version: '1.0',
                     fileUrl: getFileDownloadUrl(bf.fileUrl),
                     backendFileUrl: bf.fileUrl,
+                    externalUrl: bf.externalUrl || null,
                     isRealUpload: true,
                   };
                 });
@@ -461,10 +488,46 @@ export const DMSProvider = ({ children }) => {
           });
         }
 
-        // 1. Fetch all registered users from backend MongoDB
+        // Fetch all backend folders for each valid project
+        const allBackendFolders = [];
+        for (const bp of validBackendProjects) {
+          try {
+            const fRes = await getProjectFoldersService(bp._id);
+            if (fRes && fRes.success && Array.isArray(fRes.data)) {
+              fRes.data.forEach((fld) => {
+                allBackendFolders.push({
+                  id: fld._id,
+                  name: fld.name,
+                  projectId: bp._id,
+                  parentFolderId: fld.parentFolderId ? (typeof fld.parentFolderId === 'object' ? fld.parentFolderId._id : fld.parentFolderId) : null,
+                  createdBy: fld.createdBy ? (typeof fld.createdBy === 'object' ? fld.createdBy.name || fld.createdBy.email : fld.createdBy) : 'Admin',
+                  createdAt: fld.createdAt || new Date().toISOString(),
+                  isBackendFolder: true,
+                });
+              });
+            }
+          } catch (fErr) {
+            // ignore
+          }
+        }
+
+        if (allBackendFolders.length > 0) {
+          setFolders((prev) => {
+            const map = new Map();
+            // Preserve all existing subfolders
+            prev.forEach((f) => { if (f && f.id) map.set(f.id, f); });
+            // Add or refresh root folders
+            allBackendFolders.forEach((f) => { if (f && f.id) map.set(f.id, f); });
+            const combined = Array.from(map.values());
+            localStorage.setItem('kt_dms_folders', JSON.stringify(combined));
+            return combined;
+          });
+        }
+
+        // 1. Fetch all registered users from backend MongoDB with high limit (500)
         let allBackendUsers = [];
         try {
-          const uRes = await getAllUsersService(1, 100);
+          const uRes = await getAllUsersService(1, 500);
           if (uRes && uRes.success && Array.isArray(uRes.data)) {
             allBackendUsers = uRes.data;
           }
@@ -638,6 +701,36 @@ export const DMSProvider = ({ children }) => {
     }
   }, []);
 
+  const loadProjectFolders = useCallback(async (projectId, parentFolderId = null) => {
+    if (!projectId || !/^[0-9a-fA-F]{24}$/.test(projectId)) return;
+    try {
+      const pFolderId = parentFolderId && /^[0-9a-fA-F]{24}$/.test(parentFolderId) ? parentFolderId : null;
+      const res = await getProjectFoldersService(projectId, pFolderId);
+      if (res && res.success && Array.isArray(res.data)) {
+        const mapped = res.data.map((fld) => ({
+          id: fld._id,
+          name: fld.name,
+          projectId: fld.projectId?._id || fld.projectId || projectId,
+          parentFolderId: fld.parentFolderId ? (typeof fld.parentFolderId === 'object' ? fld.parentFolderId._id : fld.parentFolderId) : null,
+          createdBy: fld.createdBy ? (typeof fld.createdBy === 'object' ? fld.createdBy.name || fld.createdBy.email : fld.createdBy) : 'Admin',
+          createdAt: fld.createdAt || new Date().toISOString(),
+          isBackendFolder: true,
+        }));
+
+        setFolders((prev) => {
+          const map = new Map();
+          prev.forEach((f) => { if (f && f.id) map.set(f.id, f); });
+          mapped.forEach((f) => { if (f && f.id) map.set(f.id, f); });
+          const combined = Array.from(map.values());
+          localStorage.setItem('kt_dms_folders', JSON.stringify(combined));
+          return combined;
+        });
+      }
+    } catch (err) {
+      console.warn('Could not load project folders level:', err.message);
+    }
+  }, []);
+
   const [auditPagination, setAuditPagination] = useState({
     total: 0,
     page: 1,
@@ -739,7 +832,34 @@ export const DMSProvider = ({ children }) => {
         try {
           const raw = JSON.parse(localStorage.getItem('kt_dms_local_logs') || '[]');
           localLogs = raw.filter((l) => l.action !== 'LOGIN_FAILED' && l.actionLabel !== 'Failed Login Attempt');
-          if (localLogs.length !== raw.length) {
+          
+          let modifiedLocal = false;
+          let currentProjectsList = projects;
+          if (!currentProjectsList || currentProjectsList.length === 0) {
+            try {
+              currentProjectsList = JSON.parse(localStorage.getItem('kt_dms_projects') || '[]');
+            } catch {}
+          }
+
+          localLogs = localLogs.map((l) => {
+            let det = l.details || '';
+            (currentProjectsList || []).forEach((p) => {
+              if (p.id && p.name && det.includes(p.id)) {
+                det = det.replaceAll(p.id, p.name);
+                modifiedLocal = true;
+              }
+              if (p._id && p.name && det.includes(p._id)) {
+                det = det.replaceAll(p._id, p.name);
+                modifiedLocal = true;
+              }
+            });
+            return {
+              ...l,
+              details: det,
+            };
+          });
+
+          if (modifiedLocal || localLogs.length !== raw.length) {
             localStorage.setItem('kt_dms_local_logs', JSON.stringify(localLogs));
           }
         } catch {
@@ -779,12 +899,6 @@ export const DMSProvider = ({ children }) => {
   useEffect(() => {
     loadBackendProjects();
     loadBackendAuditLogs();
-    const handleFocus = () => {
-      loadBackendProjects();
-      loadBackendAuditLogs();
-    };
-    window.addEventListener('focus', handleFocus);
-    return () => window.removeEventListener('focus', handleFocus);
   }, [loadBackendProjects, loadBackendAuditLogs]);
 
   const currentUser = useMemo(() => {
@@ -833,6 +947,25 @@ export const DMSProvider = ({ children }) => {
   };
 
   const recordAuditLog = (action, actionLabel, target, details, category = 'Document Management', status = 'success', projectId = null, projectName = null) => {
+    let resolvedProjectName = projectName;
+    const pId = projectId || selectedProject || null;
+    if (!resolvedProjectName && pId) {
+      const matchProj = projects.find((p) => p.id === pId || p._id === pId);
+      if (matchProj) resolvedProjectName = matchProj.name;
+    }
+
+    let resolvedDetails = details;
+    if (typeof resolvedDetails === 'string') {
+      projects.forEach((p) => {
+        if (p.id && p.name && resolvedDetails.includes(p.id)) {
+          resolvedDetails = resolvedDetails.replaceAll(p.id, p.name);
+        }
+        if (p._id && p.name && resolvedDetails.includes(p._id)) {
+          resolvedDetails = resolvedDetails.replaceAll(p._id, p.name);
+        }
+      });
+    }
+
     const newLog = {
       id: `local-log-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
       timestamp: new Date().toISOString(),
@@ -845,9 +978,9 @@ export const DMSProvider = ({ children }) => {
       category,
       status,
       ip: '192.168.1.' + Math.floor(Math.random() * 150 + 10),
-      details,
-      projectId: projectId || selectedProject || null,
-      projectName: projectName || null,
+      details: resolvedDetails,
+      projectId: pId,
+      projectName: resolvedProjectName || null,
       isLocal: true,
     };
 
@@ -1199,7 +1332,9 @@ export const DMSProvider = ({ children }) => {
 
     if (!perms.canUpload) {
       addToast('Permission Denied: You do not have permission to upload files to this project.', 'error');
-      recordAuditLog('UNAUTHORIZED_ATTEMPT', 'Blocked Action', fileData.name, `Attempted to upload file to project '${targetProjId}' without permission`, 'Security', 'danger');
+      const deniedProj = projects.find((p) => p.id === targetProjId || p._id === targetProjId);
+      const deniedProjName = deniedProj ? deniedProj.name : targetProjId;
+      recordAuditLog('UNAUTHORIZED_ATTEMPT', 'Blocked Action', fileData.name, `Attempted to upload file to project '${deniedProjName}' without permission`, 'Security', 'danger', targetProjId, deniedProjName);
       return false;
     }
 
@@ -1219,6 +1354,13 @@ export const DMSProvider = ({ children }) => {
         formData.append('projectId', targetProjId);
         formData.append('userId', uId);
         formData.append('uploadedBy', uId);
+        if (fileData.externalUrl && fileData.externalUrl.trim()) {
+          formData.append('externalUrl', fileData.externalUrl.trim());
+        }
+        const activeFldId = fileData.folderId || currentFolderId;
+        if (activeFldId && /^[0-9a-fA-F]{24}$/.test(activeFldId)) {
+          formData.append('folderId', activeFldId);
+        }
 
         const uploadRes = await uploadDocumentService(formData);
         if (uploadRes && uploadRes.success && uploadRes.data) {
@@ -1230,6 +1372,7 @@ export const DMSProvider = ({ children }) => {
             type: detectTypeFromExtension(bf.originalName || bf.filename) || fileData.type || 'pdf',
             projectId: targetProjId,
             folder: targetProjId,
+            folderId: bf.folderId || fileData.folderId || currentFolderId || null,
             size: formatBytes(bf.size),
             sizeBytes: bf.size,
             uploadedBy: currentUser.name,
@@ -1239,6 +1382,7 @@ export const DMSProvider = ({ children }) => {
             version: '1.0',
             fileUrl: fullFileUrl,
             backendFileUrl: bf.fileUrl,
+            externalUrl: bf.externalUrl || fileData.externalUrl || null,
             isRealUpload: true,
           };
 
@@ -1274,6 +1418,8 @@ export const DMSProvider = ({ children }) => {
       starred: false,
       version: '1.0',
       fileUrl: fileData.fileUrl || null,
+      externalUrl: fileData.externalUrl || null,
+      folderId: fileData.folderId || currentFolderId || null,
       isRealUpload: !!fileData.fileUrl,
     };
 
@@ -1400,7 +1546,9 @@ export const DMSProvider = ({ children }) => {
       localStorage.setItem('kt_dms_files', JSON.stringify(updated));
       return updated;
     });
-    recordAuditLog('FILE_DELETE', 'Deleted File', targetFile.name, `Permanently deleted file from project '${targetFile.projectId || targetFile.folder}'`, 'Document Management', 'warning');
+    const delProj = projects.find((p) => p.id === targetFile.projectId || p._id === targetFile.projectId || p.id === targetFile.folder);
+    const delProjName = delProj?.name || targetFile.projectId || targetFile.folder || 'Project';
+    recordAuditLog('FILE_DELETE', 'Deleted File', targetFile.name, `Permanently deleted file from project '${delProjName}'`, 'Document Management', 'warning', targetFile.projectId, delProjName);
   };
 
   const renameFile = async (fileId, newName) => {
@@ -1457,7 +1605,117 @@ export const DMSProvider = ({ children }) => {
     );
   };
 
-  const inviteUser = async ({ email, projectId, projectIds, permissions }) => {
+  const createSubfolder = async ({ name, projectId, parentFolderId = null }) => {
+    const targetProjId = projectId || selectedProject;
+    if (!targetProjId) {
+      addToast('Please select a project first.', 'error');
+      return null;
+    }
+    const cleanName = (name || '').trim();
+    if (!cleanName) {
+      addToast('Folder name cannot be empty.', 'error');
+      return null;
+    }
+
+    const currentAdminToken = localStorage.getItem('admin-token');
+    const uId = currentUser.role === 'Admin'
+      ? (currentAdminToken || '6ab5114f329e2d2b1a699942')
+      : (currentUser.id?.startsWith('u-') ? currentUser.id.replace('u-', '') : currentUser.id);
+
+    const parentId = parentFolderId || currentFolderId || null;
+
+    let backendFolder = null;
+    if (/^[0-9a-fA-F]{24}$/.test(targetProjId)) {
+      try {
+        const res = await createFolderService({
+          name: cleanName,
+          projectId: targetProjId,
+          parentFolderId: parentId && /^[0-9a-fA-F]{24}$/.test(parentId) ? parentId : null,
+          userId: uId,
+          createdBy: uId,
+        });
+        if (res && res.success && res.data) {
+          backendFolder = res.data;
+        }
+      } catch (fErr) {
+        console.warn('Backend create folder notice:', fErr.message);
+      }
+    }
+
+    const newFolder = {
+      id: backendFolder?._id || ('fld_' + Date.now().toString(36) + Math.random().toString(36).substring(2, 6)),
+      name: cleanName,
+      projectId: targetProjId,
+      parentFolderId: parentId,
+      createdBy: currentUser?.name || 'Admin',
+      createdAt: backendFolder?.createdAt || new Date().toISOString(),
+      isBackendFolder: !!backendFolder?._id,
+    };
+
+    setFolders((prev) => {
+      const updated = [...prev, newFolder];
+      localStorage.setItem('kt_dms_folders', JSON.stringify(updated));
+      return updated;
+    });
+
+    const targetProjObj = projects.find((p) => p.id === targetProjId || p._id === targetProjId);
+    const targetProjName = targetProjObj?.name || targetProjId;
+
+    addToast(`Folder "${cleanName}" created successfully!`, 'success');
+    recordAuditLog(
+      'FOLDER_CREATE',
+      'Created Folder',
+      cleanName,
+      `Created folder in project '${targetProjName}'`,
+      'Folder Management',
+      'success',
+      targetProjId,
+      targetProjName
+    );
+    return newFolder;
+  };
+
+  const deleteSubfolder = async (folderId) => {
+    if (/^[0-9a-fA-F]{24}$/.test(folderId)) {
+      try {
+        await deleteFolderService(folderId);
+        loadBackendAuditLogs();
+      } catch (delErr) {
+        console.warn('Backend delete folder notice:', delErr.message);
+      }
+    }
+
+    setFolders((prev) => {
+      const idsToRemove = new Set([folderId]);
+      let addedMore = true;
+      while (addedMore) {
+        addedMore = false;
+        for (const f of prev) {
+          if (f.parentFolderId && idsToRemove.has(f.parentFolderId) && !idsToRemove.has(f.id)) {
+            idsToRemove.add(f.id);
+            addedMore = true;
+          }
+        }
+      }
+      const updated = prev.filter((f) => !idsToRemove.has(f.id));
+      localStorage.setItem('kt_dms_folders', JSON.stringify(updated));
+      return updated;
+    });
+
+    // Also remove files in this folder from state
+    setFiles((prev) => {
+      const updated = prev.filter((f) => f.folderId !== folderId);
+      localStorage.setItem('kt_dms_files', JSON.stringify(updated));
+      return updated;
+    });
+
+    if (currentFolderId === folderId) {
+      setCurrentFolderId(null);
+    }
+    addToast('Folder deleted successfully.', 'info');
+  };
+
+  const inviteUser = async ({ email, projectId, projectIds, permissions, projectPermissions }) => {
     if (!canManageUsers) {
       addToast('Only Admins can invite new team members.', 'error');
       return { success: false, error: 'Unauthorized' };
@@ -1490,7 +1748,7 @@ export const DMSProvider = ({ children }) => {
       ? [projects[0].id]
       : [];
 
-    const newPermissions = {
+    const defaultPermissions = {
       canView: permissions?.canView !== false,
       canUpload: !!permissions?.canUpload,
       canEdit: !!permissions?.canEdit,
@@ -1500,22 +1758,47 @@ export const DMSProvider = ({ children }) => {
       canViewLogs: false,
     };
 
-    const backendPerms = frontendPermissionsToBackend(newPermissions);
+    const primaryPerms = (projectPermissions && targetProjectIds[0] && projectPermissions[targetProjectIds[0]])
+      ? projectPermissions[targetProjectIds[0]]
+      : defaultPermissions;
 
-    // Call backend API for project invitations
+    // Call backend API for project invitations with multi-project & project-wise permissions
     let backendResult = null;
-    for (const projId of targetProjectIds) {
-      try {
-        const res = await inviteUserToProjectService({
-          projectId: projId,
-          email: cleanEmail,
-          permissions: backendPerms,
-        });
-        if (res && res.success) {
-          backendResult = res;
+    try {
+      const multiProjectPayload = targetProjectIds.map((pId) => ({
+        projectId: pId,
+        permissions: frontendPermissionsToBackend(
+          (projectPermissions && projectPermissions[pId])
+            ? projectPermissions[pId]
+            : defaultPermissions
+        ),
+      }));
+
+      const res = await inviteUserToProjectService({
+        email: cleanEmail,
+        projects: multiProjectPayload,
+        projectId: targetProjectIds[0] || undefined,
+        permissions: frontendPermissionsToBackend(primaryPerms),
+      });
+      if (res && res.success) {
+        backendResult = res;
+      }
+    } catch (err) {
+      console.warn('Backend multi-project invite error, attempting fallback:', err.message);
+      for (const projId of targetProjectIds) {
+        const projPerms = (projectPermissions && projectPermissions[projId])
+          ? projectPermissions[projId]
+          : defaultPermissions;
+        try {
+          const res = await inviteUserToProjectService({
+            projectId: projId,
+            email: cleanEmail,
+            permissions: frontendPermissionsToBackend(projPerms),
+          });
+          if (res && res.success) backendResult = res;
+        } catch (fallbackErr) {
+          console.warn(`Fallback invite error for ${projId}:`, fallbackErr.message);
         }
-      } catch (err) {
-        console.warn(`Backend invite warning for project ${projId}:`, err.message);
       }
     }
 
@@ -1533,7 +1816,7 @@ export const DMSProvider = ({ children }) => {
       projectIds: targetProjectIds,
       status: 'invited',
       inviteToken: token,
-      permissions: newPermissions,
+      permissions: primaryPerms,
     };
 
     if (existingUser) {
@@ -1546,6 +1829,10 @@ export const DMSProvider = ({ children }) => {
       setProjects((prev) =>
         prev.map((p) => {
           if (targetProjectIds.includes(p.id)) {
+            const specificPerms = (projectPermissions && projectPermissions[p.id])
+              ? projectPermissions[p.id]
+              : defaultPermissions;
+
             const hasMember = (p.members || []).some((m) => m.userId === userId);
             if (!hasMember) {
               return {
@@ -1554,13 +1841,9 @@ export const DMSProvider = ({ children }) => {
                   ...(p.members || []),
                   {
                     userId,
-                    permissions: {
-                      canView: newPermissions.canView,
-                      canUpload: newPermissions.canUpload,
-                      canEdit: newPermissions.canEdit,
-                      canDelete: newPermissions.canDelete,
-                      canDownload: newPermissions.canDownload,
-                    },
+                    name: invitedUser.name,
+                    email: cleanEmail,
+                    permissions: specificPerms,
                   },
                 ],
               };
@@ -1568,7 +1851,7 @@ export const DMSProvider = ({ children }) => {
               return {
                 ...p,
                 members: (p.members || []).map((m) =>
-                  m.userId === userId ? { ...m, permissions: newPermissions } : m
+                  m.userId === userId ? { ...m, permissions: specificPerms } : m
                 ),
               };
             }
@@ -1584,7 +1867,7 @@ export const DMSProvider = ({ children }) => {
       userId,
       email: cleanEmail,
       projectIds: targetProjectIds,
-      permissions: newPermissions,
+      permissions: primaryPerms,
       createdAt: new Date().toISOString(),
       status: 'pending',
     };
@@ -1600,7 +1883,7 @@ export const DMSProvider = ({ children }) => {
       'USER_INVITE',
       'Generated Project Invitation',
       `${cleanEmail} (${projectNames || 'Assigned Project'})`,
-      `Admin sent project invitation link with permissions: Upload=${newPermissions.canUpload ? 'Yes' : 'No'}, Edit=${newPermissions.canEdit ? 'Yes' : 'No'}, Delete=${newPermissions.canDelete ? 'Yes' : 'No'}`,
+      `Admin sent project invitation link with permissions: Upload=${primaryPerms.canUpload ? 'Yes' : 'No'}, Edit=${primaryPerms.canEdit ? 'Yes' : 'No'}, Delete=${primaryPerms.canDelete ? 'Yes' : 'No'}`,
       'User Management',
       'success'
     );
@@ -1740,6 +2023,29 @@ export const DMSProvider = ({ children }) => {
 
     addToast(`Welcome to the workspace, ${name.trim()}! Your workspace is ready.`, 'success');
     return { success: true };
+  };
+
+  const sendVerificationOtp = async (email) => {
+    try {
+      const res = await sendOtpService(email);
+      addToast(res.message || `Verification OTP sent to ${email}`, 'info');
+      return { success: true, message: res.message };
+    } catch (err) {
+      const msg = err.response?.data?.message || err.message;
+      addToast(`OTP Notice: ${msg}`, 'warning');
+      return { success: false, error: msg };
+    }
+  };
+
+  const verifyEmailOtp = async (email, otp) => {
+    try {
+      const res = await verifyOtpService(email, otp);
+      addToast(res.message || 'Email verified successfully!', 'success');
+      return { success: true, message: res.message };
+    } catch (err) {
+      const msg = err.response?.data?.message || err.message;
+      return { success: false, error: msg };
+    }
   };
 
   const getInviteLink = (tokenOrUserId) => {
@@ -2472,6 +2778,12 @@ export const DMSProvider = ({ children }) => {
     addProjectMember,
     removeProjectMember,
     createFolder: createProject,
+    folders,
+    currentFolderId,
+    setCurrentFolderId,
+    createSubfolder,
+    deleteSubfolder,
+    loadProjectFolders,
     isAuthenticated,
     login,
     logout,
@@ -2484,6 +2796,8 @@ export const DMSProvider = ({ children }) => {
     addUser,
     inviteUser,
     acceptInvitation,
+    sendVerificationOtp,
+    verifyEmailOtp,
     getInviteLink,
     getInvitationByToken,
     invitations,
@@ -2529,6 +2843,9 @@ export const DMSProvider = ({ children }) => {
     isAuthenticated,
     inviteToken,
     invitations,
+    folders,
+    currentFolderId,
+    loadProjectFolders,
   ]);
 
   return (

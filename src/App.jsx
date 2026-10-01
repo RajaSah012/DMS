@@ -4,6 +4,7 @@ import { Navbar } from './components/Navbar';
 import { Sidebar } from './components/Sidebar';
 import { ProjectGrid } from './components/ProjectGrid';
 import { FileTable } from './components/FileTable';
+import { FolderExplorer } from './components/FolderExplorer';
 import { UserManagement } from './components/admin/UserManagement';
 import { AuditLogs } from './components/admin/AuditLogs';
 import { UploadModal } from './components/UploadModal';
@@ -11,6 +12,8 @@ import { FilePreviewModal } from './components/FilePreviewModal';
 import { EditFileModal } from './components/EditFileModal';
 import { DeleteConfirmModal } from './components/DeleteConfirmModal';
 import { ProjectModal } from './components/ProjectModal';
+import { ShareModal } from './components/ShareModal';
+import { PublicShareScreen } from './components/PublicShareScreen';
 import { ToastNotification } from './components/ToastNotification';
 import { LoginScreen } from './components/LoginScreen';
 import { AcceptInviteScreen } from './components/AcceptInviteScreen';
@@ -38,10 +41,11 @@ const MainContent = () => {
   const [isCreateProjectOpen, setIsCreateProjectOpen] = useState(false);
   const [projectToManage, setProjectToManage] = useState(null);
   const [previewFile, setPreviewFile] = useState(null);
+  const [shareFileTarget, setShareFileTarget] = useState(null);
   const [editFile, setEditFile] = useState(null);
   const [deleteFileTarget, setDeleteFileTarget] = useState(null);
 
-  const isAnyModalOpen = isUploadOpen || isCreateProjectOpen || !!projectToManage || !!previewFile || !!editFile || !!deleteFileTarget || isMobileMenuOpen;
+  const isAnyModalOpen = isUploadOpen || isCreateProjectOpen || !!projectToManage || !!previewFile || !!shareFileTarget || !!editFile || !!deleteFileTarget || isMobileMenuOpen;
   useScrollLock(isAnyModalOpen);
 
   return (
@@ -100,8 +104,11 @@ const MainContent = () => {
                 onOpenManageProject={(proj) => setProjectToManage(proj)}
               />
 
+              <FolderExplorer />
+
               <FileTable
                 onPreview={(file) => setPreviewFile(file)}
+                onShare={(file) => setShareFileTarget(file)}
                 onEdit={(file) => setEditFile(file)}
                 onDelete={(file) => setDeleteFileTarget(file)}
               />
@@ -136,6 +143,12 @@ const MainContent = () => {
         onClose={() => setPreviewFile(null)}
       />
 
+      <ShareModal
+        file={shareFileTarget}
+        isOpen={!!shareFileTarget}
+        onClose={() => setShareFileTarget(null)}
+      />
+
       <EditFileModal
         file={editFile}
         isOpen={!!editFile}
@@ -156,6 +169,12 @@ const MainContent = () => {
 
 const AppContent = () => {
   const { isAuthenticated, inviteToken } = useDMS();
+
+  // Check for public share link in URL (fallback)
+  const shareToken = typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('share') : null;
+  if (shareToken) {
+    return <PublicShareScreen />;
+  }
 
   if (inviteToken) {
     return (
@@ -179,10 +198,17 @@ const AppContent = () => {
 };
 
 export default function App() {
+  // Check for public share link in URL directly so public recipients don't initialize DMS auth context
+  const shareToken = typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('share') : null;
+  if (shareToken) {
+    return <PublicShareScreen />;
+  }
+
   return (
     <DMSProvider>
       <AppContent />
     </DMSProvider>
   );
 }
+
 
