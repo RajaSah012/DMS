@@ -16,12 +16,11 @@ import {
   ShieldAlert,
   ChevronLeft,
   ChevronRight,
-  ExternalLink,
-  Share2
+  ExternalLink
 } from 'lucide-react';
 import { useDMS } from '../context/DMSContext';
 
-export const FileTable = ({ onPreview, onEdit, onDelete, onShare }) => {
+export const FileTable = ({ onPreview, onEdit, onDelete }) => {
   const { 
     files, 
     projects,
@@ -264,13 +263,6 @@ export const FileTable = ({ onPreview, onEdit, onDelete, onShare }) => {
                         <Download className="w-4 h-4" />
                       </button>
                       <button
-                        onClick={() => onShare && onShare(file)}
-                        className="p-1.5 rounded-lg text-slate-500 hover:text-[#00A3E0] hover:bg-sky-50 transition-colors cursor-pointer"
-                        title="Share File (Expiring & One-Time Link)"
-                      >
-                        <Share2 className="w-4 h-4" />
-                      </button>
-                      <button
                         onClick={() => onEdit(file)}
                         disabled={!fileCanEdit}
                         className={`p-1.5 rounded-lg transition-colors ${
@@ -401,14 +393,6 @@ export const FileTable = ({ onPreview, onEdit, onDelete, onShare }) => {
                             title={fileCanDownload ? 'Download File' : 'Download Restricted'}
                           >
                             <Download className="w-4 h-4" />
-                          </button>
-
-                          <button
-                            onClick={() => onShare && onShare(file)}
-                            className="p-1.5 rounded-lg text-slate-500 hover:text-[#00A3E0] hover:bg-sky-50 transition-colors cursor-pointer"
-                            title="Share File (Expiring & One-Time Link)"
-                          >
-                            <Share2 className="w-4 h-4" />
                           </button>
 
                           <button

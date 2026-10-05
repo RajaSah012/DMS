@@ -33,13 +33,13 @@ import {
   getProjectFoldersService, 
   deleteFolderService 
 } from '../services/folderService';
-import { getAuditLogsService } from '../services/auditService';
+import { getAuditLogsService, createAuditLogService } from '../services/auditService';
 
 const DMSContext = createContext();
 
 export const DMSProvider = ({ children }) => {
-  // Purge any legacy dummy admin1 or old mock token from previous tests
   try {
+    localStorage.removeItem('kt_dms_local_logs');
     const cachedAdminEmail = localStorage.getItem('admin-email');
     if (cachedAdminEmail && cachedAdminEmail.toLowerCase() === 'admin1@gmail.com') {
       localStorage.removeItem('admin-email');
@@ -254,7 +254,7 @@ export const DMSProvider = ({ children }) => {
     }
   }, [selectedProject]);
 
-  // Multi-tab synchronization
+  // Multi-tab synchronization: Sync data collections across tabs, but keep active tab session isolated
   useEffect(() => {
     const handleStorageChange = (e) => {
       if (!e.newValue) return;
@@ -269,16 +269,6 @@ export const DMSProvider = ({ children }) => {
           setFiles(JSON.parse(e.newValue));
         } else if (e.key === 'kt_dms_logs') {
           setLogs(JSON.parse(e.newValue));
-        } else if (e.key === 'kt_dms_active_tab') {
-          if (['all-files', 'users', 'logs'].includes(e.newValue)) {
-            setActiveTab(e.newValue);
-          }
-        } else if (e.key === 'kt_dms_auth') {
-          setIsAuthenticated(e.newValue === 'true');
-        } else if (e.key === 'kt_dms_active_user_id') {
-          setCurrentUserId(e.newValue || null);
-        } else if (e.key === 'kt_dms_selected_project') {
-          setSelectedProject(e.newValue || null);
         }
       } catch (err) {
         console.error('Failed to sync state from storage event:', err);
@@ -833,16 +823,21 @@ export const DMSProvider = ({ children }) => {
             detailsStr = bLog.details;
           } else if (bLog.details && typeof bLog.details === 'object') {
             const det = bLog.details;
-            target = det.fileName || det.originalName || det.name || bLog.entityType;
-            if (det.fileName) {
+            if (det.description) {
+              detailsStr = det.description;
+            } else if (det.fileName) {
               detailsStr = `${(bLog.action === 'UPLOAD_FILE' || bLog.action === 'FILE_UPLOAD') ? 'Uploaded' : 'Action on'} file '${det.fileName}'`;
             }
-            if (bLog.projectId?.name) {
-              detailsStr += detailsStr ? ` in project '${bLog.projectId.name}'` : `Project: ${bLog.projectId.name}`;
+            if (bLog.projectId?.name && !detailsStr.includes(bLog.projectId.name)) {
+              detailsStr += ` in project '${bLog.projectId.name}'`;
             }
             if (!detailsStr) {
               detailsStr = JSON.stringify(det);
             }
+            if (det.target) target = det.target;
+            else if (det.fileName) target = det.fileName;
+            else if (det.projectName) target = det.projectName;
+            else if (det.name) target = det.name;
           }
 
           switch (bLog.action) {
@@ -861,13 +856,46 @@ export const DMSProvider = ({ children }) => {
               actionLabel = 'Downloaded Document';
               break;
             case 'USER_LOGIN':
-              actionLabel = 'User Logged In';
+            case 'ADMIN_LOGIN':
+              actionLabel = (bLog.userType === 'Admin' || bLog.adminId) ? 'Admin Logged In' : 'Member Logged In';
+              if (bLog.userType === 'Admin' || bLog.adminId) {
+                target = 'Admin';
+              } else {
+                target = bLog.userId?.name || bLog.details?.name || 'Member';
+              }
+              break;
+            case 'USER_LOGOUT':
+            case 'ADMIN_LOGOUT':
+              actionLabel = (bLog.userType === 'Admin' || bLog.adminId) ? 'Admin Logged Out' : 'Member Logged Out';
+              if (bLog.userType === 'Admin' || bLog.adminId) {
+                target = 'Admin';
+                if (detailsStr && detailsStr.startsWith('User signed out')) {
+                  detailsStr = detailsStr.replace('User signed out', 'Admin signed out');
+                }
+              } else {
+                target = bLog.userId?.name || 'Member';
+              }
+              break;
+            case 'USER_REGISTER':
+              actionLabel = 'Completed Account Registration';
               break;
             case 'USER_INVITE':
-              actionLabel = 'Invited Member';
+              actionLabel = 'Generated Project Invitation';
+              break;
+            case 'USER_DELETE':
+              actionLabel = 'Removed User Account';
               break;
             case 'PERMISSION_UPDATE':
               actionLabel = 'Updated Permissions';
+              break;
+            case 'CREATE_PROJECT':
+              actionLabel = 'Created Project';
+              break;
+            case 'UPDATE_PROJECT':
+              actionLabel = 'Updated Project';
+              break;
+            case 'PROJECT_DELETE':
+              actionLabel = 'Deleted Project';
               break;
             default:
               actionLabel = bLog.action.replace(/_/g, ' ');
@@ -881,8 +909,8 @@ export const DMSProvider = ({ children }) => {
             userRole: bLog.userType || 'User',
             action: bLog.action,
             actionLabel,
-            target: target || bLog.projectId?.name || 'Document',
-            category: bLog.entityType || 'Document Management',
+            target: target || bLog.projectId?.name || 'System',
+            category: bLog.entityType || 'Activity',
             status: 'success',
             details: detailsStr || `Activity on ${bLog.entityType}`,
             isBackendLog: true,
@@ -891,58 +919,10 @@ export const DMSProvider = ({ children }) => {
           };
         });
 
-        // Retrieve persistent local action logs (such as User Delete, User Invite, Permission Updates)
-        let localLogs = [];
-        try {
-          const raw = JSON.parse(localStorage.getItem('kt_dms_local_logs') || '[]');
-          localLogs = raw.filter((l) => l.action !== 'LOGIN_FAILED' && l.actionLabel !== 'Failed Login Attempt');
-          
-          let modifiedLocal = false;
-          let currentProjectsList = projects;
-          if (!currentProjectsList || currentProjectsList.length === 0) {
-            try {
-              currentProjectsList = JSON.parse(localStorage.getItem('kt_dms_projects') || '[]');
-            } catch {}
-          }
+        setLogs(mappedBackendLogs);
 
-          localLogs = localLogs.map((l) => {
-            let det = l.details || '';
-            (currentProjectsList || []).forEach((p) => {
-              if (p.id && p.name && det.includes(p.id)) {
-                det = det.replaceAll(p.id, p.name);
-                modifiedLocal = true;
-              }
-              if (p._id && p.name && det.includes(p._id)) {
-                det = det.replaceAll(p._id, p.name);
-                modifiedLocal = true;
-              }
-            });
-            return {
-              ...l,
-              details: det,
-            };
-          });
-
-          if (modifiedLocal || localLogs.length !== raw.length) {
-            localStorage.setItem('kt_dms_local_logs', JSON.stringify(localLogs));
-          }
-        } catch {
-          localLogs = [];
-        }
-
-        // Deduplicate against backend logs
-        const backendIds = new Set(mappedBackendLogs.map((l) => l.id));
-        const nonBackendLocalLogs = localLogs.filter((l) => !backendIds.has(l.id) && l.action !== 'LOGIN_FAILED' && l.actionLabel !== 'Failed Login Attempt');
-
-        // Combine all logs and sort newest first
-        const combined = [...nonBackendLocalLogs, ...mappedBackendLogs].sort(
-          (a, b) => new Date(b.timestamp) - new Date(a.timestamp)
-        );
-
-        setLogs(combined);
-
-        const totalEntries = (res.pagination?.total || mappedBackendLogs.length) + nonBackendLocalLogs.length;
-        const totalPages = Math.max(1, Math.ceil(totalEntries / limit));
+        const totalEntries = res.pagination?.total || mappedBackendLogs.length;
+        const totalPages = res.pagination?.totalPages || Math.max(1, Math.ceil(totalEntries / limit));
 
         setAuditPagination({
           total: totalEntries,
@@ -953,7 +933,7 @@ export const DMSProvider = ({ children }) => {
           hasPrevPage: page > 1,
         });
 
-        return { data: combined, pagination: { total: totalEntries, page, limit, totalPages } };
+        return { data: mappedBackendLogs, pagination: { total: totalEntries, page, limit, totalPages } };
       }
     } catch (err) {
       console.warn('Backend audit logs fetch notice:', err.message);
@@ -1013,7 +993,7 @@ export const DMSProvider = ({ children }) => {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   };
 
-  const recordAuditLog = (action, actionLabel, target, details, category = 'Document Management', status = 'success', projectId = null, projectName = null) => {
+  const recordAuditLog = async (action, actionLabel, target, details, category = 'Document Management', status = 'success', projectId = null, projectName = null) => {
     let resolvedProjectName = projectName;
     const pId = projectId || selectedProject || null;
     if (!resolvedProjectName && pId) {
@@ -1033,42 +1013,38 @@ export const DMSProvider = ({ children }) => {
       });
     }
 
-    const newLog = {
-      id: `local-log-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
-      timestamp: new Date().toISOString(),
-      userId: currentUser?.id || 'u-admin',
-      userName: currentUser?.name || 'Admin',
-      userRole: currentUser?.role || 'Admin',
-      action,
-      actionLabel,
-      target,
-      category,
-      status,
-      ip: '192.168.1.' + Math.floor(Math.random() * 150 + 10),
-      details: resolvedDetails,
-      projectId: pId,
-      projectName: resolvedProjectName || null,
-      isLocal: true,
-    };
-
     try {
-      const savedLocal = JSON.parse(localStorage.getItem('kt_dms_local_logs') || '[]');
-      const updatedLocal = [newLog, ...savedLocal].slice(0, 100);
-      localStorage.setItem('kt_dms_local_logs', JSON.stringify(updatedLocal));
-    } catch (e) {
-      // ignore
-    }
+      const adminToken = localStorage.getItem('admin-token');
+      const rawUserId = currentUser?.id;
+      let cleanUserId = null;
+      let cleanAdminId = null;
 
-    setLogs((prev) => [newLog, ...prev]);
-    setAuditPagination((prev) => {
-      const newTotal = (prev?.total || 0) + 1;
-      const limit = prev?.limit || 10;
-      return {
-        ...prev,
-        total: newTotal,
-        totalPages: Math.max(1, Math.ceil(newTotal / limit)),
-      };
-    });
+      if (adminToken && /^[0-9a-fA-F]{24}$/.test(adminToken)) {
+        cleanAdminId = adminToken;
+      } else if (rawUserId && /^[0-9a-fA-F]{24}$/.test(rawUserId)) {
+        if (currentUser?.role === 'Admin') cleanAdminId = rawUserId;
+        else cleanUserId = rawUserId;
+      }
+
+      await createAuditLogService({
+        userId: cleanUserId,
+        adminId: cleanAdminId,
+        userType: currentUser?.role === 'Admin' ? 'Admin' : 'User',
+        projectId: (pId && /^[0-9a-fA-F]{24}$/.test(pId)) ? pId : null,
+        action,
+        entityType: category || 'System',
+        details: {
+          actionLabel,
+          target,
+          description: resolvedDetails,
+          projectName: resolvedProjectName || null
+        }
+      });
+
+      await loadBackendAuditLogs(1, 10);
+    } catch (e) {
+      console.warn('Failed to record audit log:', e);
+    }
   };
 
   const login = async (userIdOrEmail, password = '') => {
@@ -1130,14 +1106,7 @@ export const DMSProvider = ({ children }) => {
         localStorage.setItem('kt_dms_auth', 'true');
         localStorage.setItem('kt_dms_active_user_id', activeAdmin.id);
 
-        recordAuditLog(
-          'USER_LOGIN',
-          'Admin Logged In',
-          activeAdmin.name,
-          `Authenticated successfully as Admin via Backend API (${emailToSend})`,
-          'Authentication',
-          'success'
-        );
+        loadBackendAuditLogs();
         addToast(adminRes.message || `Welcome back, ${activeAdmin.name}!`, 'success');
         return true;
       }
@@ -1239,19 +1208,15 @@ export const DMSProvider = ({ children }) => {
             return updated;
           });
 
+          localStorage.removeItem('admin-token');
+          localStorage.removeItem('admin-email');
+          localStorage.removeItem('admin-name');
           setCurrentUserId(activeMember.id);
           setIsAuthenticated(true);
           localStorage.setItem('kt_dms_auth', 'true');
           localStorage.setItem('kt_dms_active_user_id', activeMember.id);
 
-          recordAuditLog(
-            'USER_LOGIN',
-            'Member Logged In',
-            activeMember.name,
-            `Authenticated successfully as Member via Backend API (${emailToSend})`,
-            'Authentication',
-            'success'
-          );
+          loadBackendAuditLogs();
           addToast(userRes.message || `Welcome back, ${activeMember.name}!`, 'success');
           return true;
         }
@@ -1274,8 +1239,20 @@ export const DMSProvider = ({ children }) => {
     }
   };
 
-  const logout = () => {
-    recordAuditLog('USER_LOGOUT', 'User Logged Out', currentUser?.name || 'User', `User signed out of document workspace`, 'Authentication', 'info');
+  const logout = async () => {
+    const isAdmin = currentUser?.role === 'Admin' || !!localStorage.getItem('admin-token') || !!localStorage.getItem('admin-email');
+    try {
+      await recordAuditLog(
+        isAdmin ? 'ADMIN_LOGOUT' : 'USER_LOGOUT',
+        isAdmin ? 'Admin Logged Out' : 'Member Logged Out',
+        isAdmin ? 'Admin' : (currentUser?.name || 'Member'),
+        `${isAdmin ? 'Admin' : 'User'} signed out of document workspace`,
+        'Authentication',
+        'info'
+      );
+    } catch {
+      // ignore
+    }
     setIsAuthenticated(false);
     setCurrentUserId(null);
     localStorage.removeItem('admin-token');
@@ -1470,7 +1447,6 @@ export const DMSProvider = ({ children }) => {
             return updated;
           });
 
-          recordAuditLog('FILE_UPLOAD', 'Uploaded Document', newFile.name, `Uploaded to backend project '${projectName}' (${newFile.size})`, 'Document Management', 'success');
           addToast(`File "${newFile.name}" uploaded successfully to project "${projectName}"!`, 'success');
           loadBackendAuditLogs();
           return true;
@@ -2082,6 +2058,9 @@ export const DMSProvider = ({ children }) => {
     // Attempt auto-login via backend
     const loginOk = await login(finalEmail, password);
     if (!loginOk) {
+      localStorage.removeItem('admin-token');
+      localStorage.removeItem('admin-email');
+      localStorage.removeItem('admin-name');
       const finalUserId = targetUser ? targetUser.id : (invite?.userId || `u-${Date.now()}`);
       setCurrentUserId(finalUserId);
       setIsAuthenticated(true);
@@ -2101,15 +2080,7 @@ export const DMSProvider = ({ children }) => {
       window.history.replaceState({}, document.title, window.location.pathname);
     }
 
-    recordAuditLog(
-      'USER_REGISTER',
-      'Completed Account Registration',
-      `${name.trim()} (${finalEmail})`,
-      `User accepted project invitation and registered member account`,
-      'User Management',
-      'success'
-    );
-
+    loadBackendAuditLogs();
     addToast(`Welcome to the workspace, ${name.trim()}! Your workspace is ready.`, 'success');
     return { success: true };
   };
@@ -2873,7 +2844,6 @@ export const DMSProvider = ({ children }) => {
     files,
     projects,
     setProjects,
-    folders: projects,
     selectedFolder: selectedProject,
     setSelectedFolder: setSelectedProject,
     selectedProject,

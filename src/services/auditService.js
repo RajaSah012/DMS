@@ -17,3 +17,13 @@ export const getAuditLogsService = async (projectId = null, page = 1, limit = 10
     throw error;
   }
 };
+
+export const createAuditLogService = async (logData) => {
+  try {
+    const response = await API.post("/admin/audit-logs", logData);
+    return response.data;
+  } catch (error) {
+    console.error("Create audit log API error:", error);
+    return null;
+  }
+};

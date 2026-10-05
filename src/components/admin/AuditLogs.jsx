@@ -181,6 +181,12 @@ export const AuditLogs = () => {
         return 'bg-amber-50 text-amber-700 border-amber-200';
       case 'USER_DELETE':
         return 'bg-rose-50 text-rose-700 border-rose-200';
+      case 'USER_LOGIN':
+      case 'ADMIN_LOGIN':
+        return 'bg-sky-50 text-sky-700 border-sky-200';
+      case 'USER_LOGOUT':
+      case 'ADMIN_LOGOUT':
+        return 'bg-slate-100 text-slate-700 border-slate-300';
       case 'UNAUTHORIZED_ATTEMPT':
         return 'bg-red-100 text-red-800 border-red-300 font-bold';
       default:
