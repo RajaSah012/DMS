@@ -204,7 +204,7 @@ export const ProjectModal = ({
               <div>
                 <h4 className="text-xs font-bold text-[#0A2540] flex items-center gap-1.5">
                   <Users className="w-4 h-4 text-[#00A3E0]" />
-                  <span>Assign Members & Granular Permissions</span>
+                  <span>Assign Members & Permissions</span>
                 </h4>
                 <p className="text-[11px] text-slate-400">
                   Select which users can access this project and check allowed actions (Upload, Edit, Delete, Download).

@@ -101,7 +101,7 @@ export const UserManagement = () => {
             <span>Team Access & Permissions Control</span>
           </h2>
           <p className="text-xs text-slate-500">
-            Provision team accounts, configure granular permissions (Upload, Edit, Delete, Download), and manage system security.
+            Provision team accounts, configure permissions (Upload, Edit, Delete, Download), and manage system security.
           </p>
         </div>
 
@@ -164,7 +164,7 @@ export const UserManagement = () => {
               <tr className="border-b border-slate-100 text-[11px] font-bold text-slate-400 uppercase tracking-wider bg-slate-50/70">
                 <th className="py-3.5 pl-6 pr-3">User & Email</th>
                 <th className="py-3.5 px-3">Projects</th>
-                <th className="py-3.5 px-3">Granular Permissions</th>
+                <th className="py-3.5 px-3">Permissions</th>
                 <th className="py-3.5 px-3">Status</th>
                 <th className="py-3.5 pr-6 pl-3 text-right">Actions</th>
               </tr>
@@ -301,7 +301,7 @@ export const UserManagement = () => {
                         {user.status === 'invited' && (
                           <button
                             onClick={() => {
-                              const link = getInviteLink(user.id);
+                              const link = getInviteLink(user.inviteToken || user.id, user.email);
                               navigator.clipboard.writeText(link).then(() => {
                                 addToast('Invitation link copied to clipboard!', 'success');
                               });

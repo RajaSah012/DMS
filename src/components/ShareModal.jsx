@@ -60,7 +60,7 @@ export const ShareModal = ({ file, isOpen, onClose }) => {
     // Call Backend share-link API if file.id is a 24-character ObjectId
     if (file.id && /^[0-9a-fA-F]{24}$/.test(file.id)) {
       try {
-        const uId = localStorage.getItem('admin-token') || '6ab5114f329e2d2b1a699942';
+        const uId = localStorage.getItem('admin-token') || localStorage.getItem('kt_dms_active_user_id')?.replace(/^u-/, '') || undefined;
         const res = await createShareLinkService({
           fileId: file.id,
           expiresInHours: selectedOption.hours || null,

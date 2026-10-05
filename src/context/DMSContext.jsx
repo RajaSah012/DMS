@@ -38,10 +38,31 @@ import { getAuditLogsService } from '../services/auditService';
 const DMSContext = createContext();
 
 export const DMSProvider = ({ children }) => {
+  // Purge any legacy dummy admin1 or old mock token from previous tests
+  try {
+    const cachedAdminEmail = localStorage.getItem('admin-email');
+    if (cachedAdminEmail && cachedAdminEmail.toLowerCase() === 'admin1@gmail.com') {
+      localStorage.removeItem('admin-email');
+      localStorage.removeItem('admin-name');
+    }
+    const cachedToken = localStorage.getItem('admin-token');
+    if (cachedToken === '6ab5114f329e2d2b1a699942') {
+      localStorage.removeItem('admin-token');
+    }
+    const cachedUsers = localStorage.getItem('kt_dms_users');
+    if (cachedUsers && (cachedUsers.includes('admin1@gmail.com') || cachedUsers.includes('Admin1'))) {
+      const cleaned = JSON.parse(cachedUsers).filter(
+        (u) => (u.email || '').toLowerCase() !== 'admin1@gmail.com' && u.name !== 'Admin1'
+      );
+      localStorage.setItem('kt_dms_users', JSON.stringify(cleaned));
+    }
+  } catch {}
+
   const [users, setUsers] = useState(() => {
     const saved = localStorage.getItem('kt_dms_users');
-    const currentAdminEmail = (localStorage.getItem('admin-email') || 'admin1@gmail.com').toLowerCase();
+    const currentAdminEmail = (localStorage.getItem('admin-email') || '').toLowerCase();
     const currentAdminToken = localStorage.getItem('admin-token');
+    const currentAdminName = localStorage.getItem('admin-name');
 
     let deletedUserEmails = [];
     let deletedUserIds = [];
@@ -50,9 +71,9 @@ export const DMSProvider = ({ children }) => {
       deletedUserIds = JSON.parse(localStorage.getItem('kt_dms_deleted_user_ids') || '[]').map((id) => String(id));
     } catch {}
 
-    const emailPrefix = currentAdminEmail.split('@')[0];
-    const displayName = emailPrefix.charAt(0).toUpperCase() + emailPrefix.slice(1);
-    const activeAdmin = {
+    const emailPrefix = currentAdminEmail ? currentAdminEmail.split('@')[0] : '';
+    const displayName = currentAdminName || (emailPrefix ? emailPrefix.charAt(0).toUpperCase() + emailPrefix.slice(1) : 'Admin');
+    const activeAdmin = currentAdminEmail ? {
       id: currentAdminToken ? `u-${currentAdminToken}` : 'u-admin',
       name: displayName,
       email: currentAdminEmail,
@@ -70,7 +91,7 @@ export const DMSProvider = ({ children }) => {
         canManageUsers: true,
         canViewLogs: true,
       },
-    };
+    } : null;
 
     if (saved) {
       try {
@@ -79,16 +100,18 @@ export const DMSProvider = ({ children }) => {
           (u) =>
             u.role !== 'Admin' &&
             u.email &&
-            u.email.toLowerCase() !== currentAdminEmail &&
+            u.email.toLowerCase() !== 'admin1@gmail.com' &&
+            u.name !== 'Admin1' &&
+            (!currentAdminEmail || u.email.toLowerCase() !== currentAdminEmail) &&
             !deletedUserEmails.includes(u.email.toLowerCase()) &&
             !deletedUserIds.includes(String(u.id))
         );
-        return [activeAdmin, ...membersOnly];
+        return activeAdmin ? [activeAdmin, ...membersOnly] : membersOnly;
       } catch {
-        return [activeAdmin];
+        return activeAdmin ? [activeAdmin] : [];
       }
     }
-    return [activeAdmin];
+    return activeAdmin ? [activeAdmin] : [];
   });
 
   const [currentUserId, setCurrentUserId] = useState(() => {
@@ -302,11 +325,13 @@ export const DMSProvider = ({ children }) => {
           }
         } catch {}
 
-        const currentAdminEmail = (localStorage.getItem('admin-email') || 'admin1@gmail.com').toLowerCase();
-        const currentAdminToken = localStorage.getItem('admin-token');
+        const currentAdminEmail = (localStorage.getItem('admin-email') || currentUser?.email || '').toLowerCase();
+        const currentAdminToken = localStorage.getItem('admin-token') || (currentUser?.id?.startsWith('u-') ? currentUser.id.replace('u-', '') : currentUser?.id);
+        const emailPrefix = currentAdminEmail ? currentAdminEmail.split('@')[0] : '';
+        const adminDisplayName = localStorage.getItem('admin-name') || currentUser?.name || (emailPrefix ? emailPrefix.charAt(0).toUpperCase() + emailPrefix.slice(1) : 'Admin');
         const adminMember = {
-          userId: currentAdminToken ? `u-${currentAdminToken}` : 'u-admin',
-          name: 'Admin1',
+          userId: currentAdminToken ? (currentAdminToken.startsWith('u-') ? currentAdminToken : `u-${currentAdminToken}`) : 'u-admin',
+          name: adminDisplayName,
           email: currentAdminEmail,
           permissions: { canView: true, canUpload: true, canEdit: true, canDelete: true, canDownload: true },
         };
@@ -401,10 +426,10 @@ export const DMSProvider = ({ children }) => {
 
             let docs = [];
             try {
-              const docsRes = await getProjectDocumentsService(bp._id, currentAdminToken || '6ab5114f329e2d2b1a699942', 1, 100);
+              const docsRes = await getProjectDocumentsService(bp._id, currentAdminToken || undefined, 1, 100);
               if (docsRes && docsRes.success && Array.isArray(docsRes.data)) {
                 docs = docsRes.data.map((bf) => {
-                  let uploaderName = 'Admin1';
+                  let uploaderName = adminDisplayName;
                   let uploaderRole = 'Admin';
 
                   if (bf.uploadedBy) {
@@ -418,8 +443,8 @@ export const DMSProvider = ({ children }) => {
                         uploaderRole = 'Member';
                       }
                     } else if (typeof bf.uploadedBy === 'string') {
-                      if (bf.uploadedBy === currentAdminToken || bf.uploadedBy === '6ab5114f329e2d2b1a699942') {
-                        uploaderName = 'Admin1';
+                      if (bf.uploadedBy === currentAdminToken || (adminMember.userId && (bf.uploadedBy === adminMember.userId || bf.uploadedBy === adminMember.userId.replace(/^u-/, '')))) {
+                        uploaderName = adminDisplayName;
                         uploaderRole = 'Admin';
                       } else {
                         const matchedMember = finalProjMembers.find((m) => m.userId === bf.uploadedBy);
@@ -430,10 +455,7 @@ export const DMSProvider = ({ children }) => {
                       }
                     }
                   } else {
-                    // Backend File schema has ref: 'User'. When an Admin uploads,
-                    // Mongoose populate("uploadedBy") finds no document in User collection and returns null.
-                    const adminPrefix = currentAdminEmail.split('@')[0];
-                    uploaderName = adminPrefix ? adminPrefix.charAt(0).toUpperCase() + adminPrefix.slice(1) : 'Admin1';
+                    uploaderName = adminDisplayName;
                     uploaderRole = 'Admin';
                   }
 
@@ -535,15 +557,22 @@ export const DMSProvider = ({ children }) => {
           console.warn('Backend users load notice:', uErr.message);
         }
 
+        const registeredEmails = new Set(
+          allBackendUsers.map((bu) => (bu.email || '').toLowerCase()).filter(Boolean)
+        );
+        const registeredIds = new Set(
+          allBackendUsers.map((bu) => String(bu._id || bu.id)).filter(Boolean)
+        );
+
         // 2. Update users state with real registered members from MongoDB
         setUsers(() => {
-          const currentAdminEmail = (localStorage.getItem('admin-email') || 'admin1@gmail.com').toLowerCase();
+          const currentAdminEmail = (localStorage.getItem('admin-email') || currentUser?.email || '').toLowerCase();
           const currentAdminToken = localStorage.getItem('admin-token');
-          const emailPrefix = currentAdminEmail.split('@')[0];
-          const displayName = emailPrefix.charAt(0).toUpperCase() + emailPrefix.slice(1);
+          const emailPrefix = currentAdminEmail ? currentAdminEmail.split('@')[0] : '';
+          const displayName = localStorage.getItem('admin-name') || currentUser?.name || (emailPrefix ? emailPrefix.charAt(0).toUpperCase() + emailPrefix.slice(1) : 'Admin');
 
-          const activeAdmin = {
-            id: currentAdminToken ? `u-${currentAdminToken}` : 'u-admin',
+          const activeAdmin = currentAdminEmail ? {
+            id: currentAdminToken ? (currentAdminToken.startsWith('u-') ? currentAdminToken : `u-${currentAdminToken}`) : 'u-admin',
             name: displayName,
             email: currentAdminEmail,
             role: 'Admin',
@@ -560,10 +589,12 @@ export const DMSProvider = ({ children }) => {
               canManageUsers: true,
               canViewLogs: true,
             },
-          };
+          } : null;
 
           const userMap = new Map();
-          userMap.set(currentAdminEmail, activeAdmin);
+          if (activeAdmin) {
+            userMap.set(currentAdminEmail, activeAdmin);
+          }
 
           // Populate registered users from MongoDB getAllUsers API
           allBackendUsers.forEach((bu) => {
@@ -572,7 +603,7 @@ export const DMSProvider = ({ children }) => {
             if (deletedUserEmails.includes(emailKey) || deletedUserIds.includes(buId)) {
               return;
             }
-            if (emailKey === currentAdminEmail) {
+            if (emailKey === currentAdminEmail || emailKey === 'admin1@gmail.com') {
               return;
             }
 
@@ -610,7 +641,7 @@ export const DMSProvider = ({ children }) => {
             });
           });
 
-          // Ensure project-assigned members are merged
+          // Ensure project-assigned members are merged (keep unregistered as invited!)
           projectsWithMembers.forEach((p) => {
             p.members.forEach((m) => {
               if (m.email) {
@@ -618,13 +649,23 @@ export const DMSProvider = ({ children }) => {
                 if (deletedUserEmails.includes(emailKey) || (m.userId && deletedUserIds.includes(String(m.userId)))) {
                   return;
                 }
+                if (emailKey === currentAdminEmail || emailKey === 'admin1@gmail.com') {
+                  return;
+                }
+
+                const isUserRegistered = registeredEmails.has(emailKey) || (m.userId && registeredIds.has(String(m.userId)));
                 const existing = userMap.get(emailKey);
-                const realMemberName =
-                  m.name && m.name !== 'Pending Registration'
-                    ? m.name
-                    : existing && existing.name && existing.name !== 'Pending Registration'
-                    ? existing.name
-                    : m.email.split('@')[0];
+                const realMemberName = isUserRegistered
+                  ? (m.name && m.name !== 'Pending Registration'
+                      ? m.name
+                      : existing && existing.name && existing.name !== 'Pending Registration'
+                      ? existing.name
+                      : m.email.split('@')[0])
+                  : (existing && existing.name && existing.name !== 'Pending Registration'
+                      ? existing.name
+                      : m.name && m.name !== 'Pending Registration'
+                      ? m.name
+                      : 'Pending Registration');
 
                 if (!existing) {
                   userMap.set(emailKey, {
@@ -634,7 +675,7 @@ export const DMSProvider = ({ children }) => {
                     role: 'Member',
                     avatar: '/p2.jpg',
                     department: 'Project Member',
-                    status: 'active',
+                    status: isUserRegistered ? 'active' : 'invited',
                     projectIds: [p.id],
                     permissions: m.permissions,
                   });
@@ -643,7 +684,7 @@ export const DMSProvider = ({ children }) => {
                     ...existing,
                     id: m.userId || existing.id,
                     name: realMemberName,
-                    status: 'active',
+                    status: isUserRegistered ? (existing.status === 'suspended' ? 'suspended' : 'active') : 'invited',
                     projectIds: Array.from(new Set([...(existing.projectIds || []), p.id])),
                   });
                 }
@@ -651,47 +692,70 @@ export const DMSProvider = ({ children }) => {
             });
           });
 
-          // Retain legitimate pending invitations that are tracked in invitations state
+          // Retain legitimate pending invitations and attach invite tokens
           const savedInvs = localStorage.getItem('kt_dms_invitations');
           if (savedInvs) {
             try {
               const parsedInvs = JSON.parse(savedInvs);
-              parsedInvs.forEach((inv) => {
-                const invEmail = inv.email?.toLowerCase();
-                if (invEmail && deletedUserEmails.includes(invEmail)) {
-                  return;
+              const updatedInvs = parsedInvs.map((inv) => {
+                const invEmail = (inv.email || '').toLowerCase();
+                if (!invEmail || deletedUserEmails.includes(invEmail)) {
+                  return inv;
                 }
-                if (invEmail && userMap.has(invEmail)) {
-                  inv.status = 'accepted';
-                  return;
+
+                const isUserRegistered = registeredEmails.has(invEmail);
+                if (isUserRegistered) {
+                  return { ...inv, status: 'accepted' };
                 }
-                if (invEmail && inv.status === 'pending') {
-                  userMap.set(invEmail, {
-                    id: `inv-${inv.id || inv.code}`,
-                    name: inv.name && inv.name !== 'Pending Registration' ? inv.name : 'Pending Registration',
-                    email: inv.email,
-                    role: 'Member',
-                    avatar: '/p2.jpg',
-                    department: 'Project Member',
-                    status: 'invited',
-                    projectIds: inv.projectId ? [inv.projectId] : (inv.projectIds || []),
-                    permissions: inv.permissions || {
-                      canView: true,
-                      canUpload: true,
-                      canEdit: false,
-                      canDelete: false,
-                      canDownload: true,
-                    },
-                  });
-                }
+
+                // If user is not yet registered in MongoDB, invitation is pending
+                const existing = userMap.get(invEmail);
+                const assignedProjIds = inv.projectId
+                  ? [inv.projectId]
+                  : Array.isArray(inv.projectIds)
+                  ? inv.projectIds
+                  : [];
+                const mergedProjIds = Array.from(
+                  new Set([...(existing?.projectIds || []), ...assignedProjIds])
+                );
+
+                userMap.set(invEmail, {
+                  id: existing?.id || inv.userId || `inv-${inv.id || inv.joinCode || Date.now()}`,
+                  name:
+                    existing?.name && existing.name !== 'Pending Registration'
+                      ? existing.name
+                      : inv.name && inv.name !== 'Pending Registration'
+                      ? inv.name
+                      : 'Pending Registration',
+                  email: inv.email,
+                  role: 'Member',
+                  avatar: '/p2.jpg',
+                  department: 'Project Member',
+                  status: 'invited',
+                  inviteToken: inv.id || inv.joinCode || existing?.inviteToken,
+                  projectIds: mergedProjIds,
+                  permissions: existing?.permissions || inv.permissions || {
+                    canView: true,
+                    canUpload: true,
+                    canEdit: false,
+                    canDelete: false,
+                    canDownload: true,
+                  },
+                });
+
+                return { ...inv, status: 'pending' };
               });
-              localStorage.setItem('kt_dms_invitations', JSON.stringify(parsedInvs));
+
+              localStorage.setItem('kt_dms_invitations', JSON.stringify(updatedInvs));
+              setInvitations(updatedInvs);
             } catch (e) {
               // ignore
             }
           }
 
-          const result = Array.from(userMap.values());
+          const result = Array.from(userMap.values()).filter(
+            (u) => (u.email || '').toLowerCase() !== 'admin1@gmail.com' && u.name !== 'Admin1'
+          );
           localStorage.setItem('kt_dms_users', JSON.stringify(result));
           return result;
         });
@@ -752,10 +816,10 @@ export const DMSProvider = ({ children }) => {
           let userName = 'System Admin';
           let userId = '';
           if (bLog.userType === 'Admin' || bLog.adminId) {
-            const adminEmail = bLog.adminId?.email || 'admin1@gmail.com';
-            const prefix = adminEmail.split('@')[0];
-            userName = prefix.charAt(0).toUpperCase() + prefix.slice(1);
-            userId = bLog.adminId?._id || bLog.adminId || 'u-admin';
+            const adminEmail = bLog.adminId?.email || localStorage.getItem('admin-email') || '';
+            const prefix = adminEmail ? adminEmail.split('@')[0] : '';
+            userName = bLog.adminId?.name || (prefix ? prefix.charAt(0).toUpperCase() + prefix.slice(1) : 'Admin');
+            userId = bLog.adminId?._id || bLog.adminId || (localStorage.getItem('admin-token') ? `u-${localStorage.getItem('admin-token')}` : 'u-admin');
           } else if (bLog.userId) {
             userName = bLog.userId.name || bLog.userId.email?.split('@')[0] || 'User';
             userId = bLog.userId._id || bLog.userId.id || bLog.userId;
@@ -906,10 +970,13 @@ export const DMSProvider = ({ children }) => {
     if (found) return found;
     if (users.length > 0) return users[0];
 
-    const savedEmail = localStorage.getItem('admin-email') || 'admin1@gmail.com';
+    const savedEmail = localStorage.getItem('admin-email') || '';
+    const savedToken = localStorage.getItem('admin-token');
+    const emailPrefix = savedEmail ? savedEmail.split('@')[0] : '';
+    const savedName = localStorage.getItem('admin-name') || (emailPrefix ? emailPrefix.charAt(0).toUpperCase() + emailPrefix.slice(1) : 'Admin');
     return {
-      id: currentUserId || 'u-admin',
-      name: savedEmail.split('@')[0],
+      id: currentUserId || (savedToken ? `u-${savedToken}` : 'u-admin'),
+      name: savedName,
       email: savedEmail,
       role: 'Admin',
       avatar: '/p1.jpg',
@@ -1016,38 +1083,47 @@ export const DMSProvider = ({ children }) => {
     try {
       const adminRes = await loginAdminService({ email: emailToSend, password });
       if (adminRes && adminRes.success) {
-        if (adminRes.data?.id) {
-          localStorage.setItem('admin-token', adminRes.data.id);
-        }
+        const adminId = adminRes.data?.id || adminRes.data?._id;
+        const loggedEmail = (adminRes.data?.email || emailToSend).trim();
+        const emailPrefix = loggedEmail.split('@')[0];
+        const displayName = emailPrefix.charAt(0).toUpperCase() + emailPrefix.slice(1);
 
-        let activeAdmin = users.find(
-          (u) => u.email.toLowerCase() === (adminRes.data.email || emailToSend).toLowerCase()
-        );
-
-        if (!activeAdmin) {
-          const emailPrefix = (adminRes.data.email || emailToSend).split('@')[0];
-          const displayName = emailPrefix.charAt(0).toUpperCase() + emailPrefix.slice(1);
-          activeAdmin = {
-            id: `u-${adminRes.data.id || Date.now()}`,
-            name: displayName,
-            email: adminRes.data.email || emailToSend,
-            role: 'Admin',
-            avatar: '/p1.jpg',
-            department: 'System Administration',
-            status: 'active',
-            projectIds: projects.map((p) => p.id),
-            permissions: {
-              canView: true,
-              canUpload: true,
-              canEdit: true,
-              canDelete: true,
-              canDownload: true,
-              canManageUsers: true,
-              canViewLogs: true,
-            },
-          };
-          setUsers((prev) => [activeAdmin, ...prev]);
+        if (adminId) {
+          localStorage.setItem('admin-token', adminId);
         }
+        localStorage.setItem('admin-email', loggedEmail);
+        localStorage.setItem('admin-name', displayName);
+
+        const activeAdmin = {
+          id: adminId ? `u-${adminId}` : 'u-admin',
+          name: displayName,
+          email: loggedEmail,
+          role: 'Admin',
+          avatar: '/p1.jpg',
+          department: 'System Administration',
+          status: 'active',
+          projectIds: projects.map((p) => p.id),
+          permissions: {
+            canView: true,
+            canUpload: true,
+            canEdit: true,
+            canDelete: true,
+            canDownload: true,
+            canManageUsers: true,
+            canViewLogs: true,
+          },
+        };
+
+        setUsers((prev) => [
+          activeAdmin,
+          ...prev.filter(
+            (u) =>
+              u.role !== 'Admin' &&
+              (u.email || '').toLowerCase() !== 'admin1@gmail.com' &&
+              (u.email || '').toLowerCase() !== loggedEmail.toLowerCase() &&
+              u.name !== 'Admin1'
+          ),
+        ]);
 
         setCurrentUserId(activeAdmin.id);
         setIsAuthenticated(true);
@@ -1203,6 +1279,8 @@ export const DMSProvider = ({ children }) => {
     setIsAuthenticated(false);
     setCurrentUserId(null);
     localStorage.removeItem('admin-token');
+    localStorage.removeItem('admin-email');
+    localStorage.removeItem('admin-name');
     localStorage.removeItem('kt_dms_active_user_id');
     localStorage.setItem('kt_dms_auth', 'false');
     localStorage.removeItem('kt_dms_active_tab');
@@ -1343,7 +1421,7 @@ export const DMSProvider = ({ children }) => {
 
     const currentAdminToken = localStorage.getItem('admin-token');
     const uId = currentUser.role === 'Admin'
-      ? (currentAdminToken || '6ab5114f329e2d2b1a699942')
+      ? (currentAdminToken || (currentUser.id?.startsWith('u-') ? currentUser.id.replace('u-', '') : currentUser.id))
       : (currentUser.id?.startsWith('u-') ? currentUser.id.replace('u-', '') : currentUser.id);
 
     // Call Backend Upload API if a real File is selected
@@ -1454,7 +1532,7 @@ export const DMSProvider = ({ children }) => {
       try {
         const currentAdminToken = localStorage.getItem('admin-token');
         const uId = currentUser.role === 'Admin'
-          ? (currentAdminToken || '6ab5114f329e2d2b1a699942')
+          ? (currentAdminToken || (currentUser.id?.startsWith('u-') ? currentUser.id.replace('u-', '') : currentUser.id))
           : (currentUser.id?.startsWith('u-') ? currentUser.id.replace('u-', '') : currentUser.id);
 
         await renameDocumentService(fileId, newName, targetProjId, uId);
@@ -1531,7 +1609,7 @@ export const DMSProvider = ({ children }) => {
       try {
         const currentAdminToken = localStorage.getItem('admin-token');
         const uId = currentUser.role === 'Admin'
-          ? (currentAdminToken || '6ab5114f329e2d2b1a699942')
+          ? (currentAdminToken || (currentUser.id?.startsWith('u-') ? currentUser.id.replace('u-', '') : currentUser.id))
           : (currentUser.id?.startsWith('u-') ? currentUser.id.replace('u-', '') : currentUser.id);
 
         await deleteDocumentService(fileId, targetFile.projectId || targetFile.folder, uId);
@@ -1619,7 +1697,7 @@ export const DMSProvider = ({ children }) => {
 
     const currentAdminToken = localStorage.getItem('admin-token');
     const uId = currentUser.role === 'Admin'
-      ? (currentAdminToken || '6ab5114f329e2d2b1a699942')
+      ? (currentAdminToken || (currentUser.id?.startsWith('u-') ? currentUser.id.replace('u-', '') : currentUser.id))
       : (currentUser.id?.startsWith('u-') ? currentUser.id.replace('u-', '') : currentUser.id);
 
     const parentId = parentFolderId || currentFolderId || null;
@@ -1902,14 +1980,25 @@ export const DMSProvider = ({ children }) => {
   };
 
   const acceptInvitation = async ({ token, name, email: directEmail, password, mobile = '9876543210' }) => {
-    const invite = invitations.find((i) => i.id === token || i.joinCode === token);
-    const targetUser = users.find((u) => u.inviteToken === token || (invite && u.id === invite.userId));
-
     let emailFromUrl = null;
     if (typeof window !== 'undefined') {
       const params = new URLSearchParams(window.location.search);
       emailFromUrl = params.get('email');
     }
+
+    const cleanEmailCandidate = (directEmail || emailFromUrl || '').toLowerCase().trim();
+    const invite = invitations.find(
+      (i) =>
+        i.id === token ||
+        i.joinCode === token ||
+        (cleanEmailCandidate && i.email?.toLowerCase() === cleanEmailCandidate)
+    );
+    const targetUser = users.find(
+      (u) =>
+        u.inviteToken === token ||
+        (invite && u.id === invite.userId) ||
+        (cleanEmailCandidate && u.email?.toLowerCase() === cleanEmailCandidate)
+    );
 
     const finalEmail = directEmail || targetUser?.email || invite?.email || emailFromUrl;
 
@@ -2048,14 +2137,37 @@ export const DMSProvider = ({ children }) => {
     }
   };
 
-  const getInviteLink = (tokenOrUserId) => {
+  const getInviteLink = (tokenOrUserId, explicitEmail = '') => {
     let token = tokenOrUserId;
-    const foundUser = users.find((u) => u.id === tokenOrUserId || u.inviteToken === tokenOrUserId);
-    if (foundUser?.inviteToken) {
-      token = foundUser.inviteToken;
+    let email = explicitEmail;
+
+    const foundUser = users.find(
+      (u) =>
+        u.id === tokenOrUserId ||
+        u.inviteToken === tokenOrUserId ||
+        (tokenOrUserId && u.email && u.email.toLowerCase() === String(tokenOrUserId).toLowerCase())
+    );
+    if (foundUser) {
+      if (foundUser.inviteToken) token = foundUser.inviteToken;
+      if (!email && foundUser.email) email = foundUser.email;
     }
+
+    const foundInv = invitations.find(
+      (i) =>
+        i.id === tokenOrUserId ||
+        i.joinCode === tokenOrUserId ||
+        i.userId === tokenOrUserId ||
+        (email && i.email && i.email.toLowerCase() === email.toLowerCase())
+    );
+    if (foundInv) {
+      token = foundInv.id || foundInv.joinCode || token;
+      if (!email && foundInv.email) email = foundInv.email;
+    }
+
     const baseUrl = typeof window !== 'undefined' ? `${window.location.origin}${window.location.pathname}` : '';
-    return `${baseUrl}?invite=${token}`;
+    return email
+      ? `${baseUrl}?invite=${encodeURIComponent(token)}&email=${encodeURIComponent(email)}`
+      : `${baseUrl}?invite=${encodeURIComponent(token)}`;
   };
 
   const getInvitationByToken = (token) => {
@@ -2067,14 +2179,31 @@ export const DMSProvider = ({ children }) => {
       urlEmail = params.get('email');
     }
 
-    const invite = invitations.find((i) => i.id === token || i.joinCode === token || (urlEmail && i.email === urlEmail.toLowerCase()));
-    const user = users.find((u) => u.inviteToken === token || (urlEmail && u.email.toLowerCase() === urlEmail.toLowerCase()));
+    const cleanUrlEmail = urlEmail ? urlEmail.toLowerCase().trim() : null;
 
-    const email = user ? user.email : (invite ? invite.email : urlEmail);
+    const invite = invitations.find(
+      (i) =>
+        i.id === token ||
+        i.joinCode === token ||
+        (cleanUrlEmail && i.email && i.email.toLowerCase() === cleanUrlEmail)
+    );
+    const user = users.find(
+      (u) =>
+        u.inviteToken === token ||
+        (cleanUrlEmail && u.email && u.email.toLowerCase() === cleanUrlEmail)
+    );
+
+    const email = cleanUrlEmail || (user ? user.email : (invite ? invite.email : null));
     if (!invite && !user && !email) return null;
 
-    const projectIds = user ? user.projectIds : (invite ? invite.projectIds : []);
-    const permissions = user ? user.permissions : (invite ? invite.permissions : {
+    // Check if user is actually already registered and active in MongoDB
+    const isAlreadyRegistered = user && user.status === 'active' && user.name !== 'Pending Registration';
+    if (invite && invite.status === 'accepted' && isAlreadyRegistered) {
+      return null;
+    }
+
+    const projectIds = invite?.projectIds || (user ? user.projectIds : (invite?.projectId ? [invite.projectId] : []));
+    const permissions = invite?.permissions || (user ? user.permissions : {
       canView: true,
       canUpload: true,
       canEdit: false,
@@ -2089,7 +2218,7 @@ export const DMSProvider = ({ children }) => {
       projectIds,
       projects: assignedProjects,
       permissions,
-      isPending: user ? user.status === 'invited' : (invite ? invite.status === 'pending' : true),
+      isPending: true,
     };
   };
 
@@ -2251,9 +2380,6 @@ export const DMSProvider = ({ children }) => {
     try {
       const adminToken = localStorage.getItem('admin-token');
       let createdBy = adminToken || (currentUser.id?.startsWith('u-') ? currentUser.id.replace('u-', '') : currentUser.id);
-      if (!createdBy || !/^[0-9a-fA-F]{24}$/.test(createdBy)) {
-        createdBy = '6ab5114f329e2d2b1a699942';
-      }
 
       const res = await createProjectService({
         name: trimmedName,
@@ -2270,11 +2396,12 @@ export const DMSProvider = ({ children }) => {
 
     const projectId = backendProj?._id || `${trimmedName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') || 'project'}-${Date.now().toString().slice(-4)}`;
 
-    const currentAdminEmail = (currentUser.email || localStorage.getItem('admin-email') || 'admin1@gmail.com').toLowerCase();
+    const currentAdminEmail = (currentUser?.email || localStorage.getItem('admin-email') || '').toLowerCase();
     const currentAdminToken = localStorage.getItem('admin-token');
+    const adminDisplayName = currentUser?.name || localStorage.getItem('admin-name') || (currentAdminEmail ? currentAdminEmail.split('@')[0] : 'Admin');
     const adminMember = {
-      userId: currentAdminToken ? `u-${currentAdminToken}` : (currentUser.id || 'u-admin'),
-      name: currentUser.name || 'Admin1',
+      userId: currentAdminToken ? (currentAdminToken.startsWith('u-') ? currentAdminToken : `u-${currentAdminToken}`) : (currentUser.id || 'u-admin'),
+      name: adminDisplayName,
       email: currentAdminEmail,
       permissions: { canView: true, canUpload: true, canEdit: true, canDelete: true, canDownload: true },
     };
@@ -2363,12 +2490,12 @@ export const DMSProvider = ({ children }) => {
     const targetProj = projects.find((p) => p.id === projectId);
     if (!targetProj) return false;
 
-    const currentAdminEmail = (currentUser.email || localStorage.getItem('admin-email') || 'admin1@gmail.com').toLowerCase();
+    const currentAdminEmail = (currentUser?.email || localStorage.getItem('admin-email') || '').toLowerCase();
 
     // 1. Persist updated name / description to backend MongoDB if valid ObjectId
     if (/^[0-9a-fA-F]{24}$/.test(projectId)) {
       try {
-        const uId = currentUser?.id || localStorage.getItem('admin-token') || '6ab5114f329e2d2b1a699942';
+        const uId = (currentUser?.id?.startsWith('u-') ? currentUser.id.replace('u-', '') : currentUser?.id) || localStorage.getItem('admin-token');
         await updateProjectDetailsService(projectId, {
           name: updateData.name ? updateData.name.trim() : targetProj.name,
           description: updateData.description !== undefined ? updateData.description.trim() : targetProj.description,
