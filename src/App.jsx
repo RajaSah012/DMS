@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { DMSProvider, useDMS } from './context/DMSContext';
 import { Navbar } from './components/Navbar';
 import { Sidebar } from './components/Sidebar';
@@ -47,6 +47,45 @@ const MainContent = () => {
 
   const isAnyModalOpen = isUploadOpen || isCreateProjectOpen || !!projectToManage || !!previewFile || !!shareFileTarget || !!editFile || !!deleteFileTarget || isMobileMenuOpen;
   useScrollLock(isAnyModalOpen);
+
+  const modalHistoryPushedRef = useRef(false);
+
+  useEffect(() => {
+    if (isAnyModalOpen) {
+      if (!modalHistoryPushedRef.current) {
+        window.history.pushState({ isModal: true }, '');
+        modalHistoryPushedRef.current = true;
+      }
+    } else {
+      if (modalHistoryPushedRef.current) {
+        modalHistoryPushedRef.current = false;
+        if (window.history.state?.isModal) {
+          window.history.back();
+        }
+      }
+    }
+  }, [isAnyModalOpen]);
+
+  useEffect(() => {
+    const handleModalPopState = () => {
+      if (modalHistoryPushedRef.current) {
+        modalHistoryPushedRef.current = false;
+        setIsUploadOpen(false);
+        setIsCreateProjectOpen(false);
+        setProjectToManage(null);
+        setPreviewFile(null);
+        setShareFileTarget(null);
+        setEditFile(null);
+        setDeleteFileTarget(null);
+        setIsMobileMenuOpen(false);
+      }
+    };
+
+    window.addEventListener('popstate', handleModalPopState);
+    return () => {
+      window.removeEventListener('popstate', handleModalPopState);
+    };
+  }, []);
 
   return (
     <div className="h-screen h-[100dvh] bg-[#F8FAFC] flex flex-col antialiased overflow-hidden">

@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useMemo, useCallback } from 'react';
+import React, { createContext, useContext, useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { 
   loginAdminService, 
   loginUserService, 
@@ -34,6 +34,34 @@ import {
   deleteFolderService 
 } from '../services/folderService';
 import { getAuditLogsService, createAuditLogService } from '../services/auditService';
+
+const parseDMSHash = (hashStr) => {
+  if (!hashStr || hashStr === '#' || typeof hashStr !== 'string') {
+    return { tab: null, projectId: null, folderId: null };
+  }
+  const clean = hashStr.startsWith('#') ? hashStr.slice(1) : hashStr;
+  const [route, queryStr] = clean.split('?');
+  const params = new URLSearchParams(queryStr || '');
+  let tab = null;
+  if (route === 'users') tab = 'users';
+  else if (route === 'logs') tab = 'logs';
+  else if (route === 'files' || route === 'all-files') tab = 'all-files';
+
+  const projectId = params.get('project') || null;
+  const folderId = params.get('folder') || null;
+  return { tab, projectId, folderId };
+};
+
+const buildDMSHash = (tab, projectId = null, folderId = null) => {
+  if (tab === 'users') return '#users';
+  if (tab === 'logs') return '#logs';
+  let h = '#files';
+  const q = [];
+  if (projectId) q.push(`project=${encodeURIComponent(projectId)}`);
+  if (folderId) q.push(`folder=${encodeURIComponent(folderId)}`);
+  if (q.length > 0) h += `?${q.join('&')}`;
+  return h;
+};
 
 const DMSContext = createContext();
 
@@ -163,7 +191,14 @@ export const DMSProvider = ({ children }) => {
     return [];
   });
 
-  const [activeTab, setActiveTab] = useState(() => {
+  const isNavigatingFromPopStateRef = useRef(false);
+  const pendingHistoryUpdateRef = useRef(null);
+
+  const [activeTab, setActiveTabState] = useState(() => {
+    if (typeof window !== 'undefined' && window.location.hash) {
+      const parsed = parseDMSHash(window.location.hash);
+      if (parsed.tab) return parsed.tab;
+    }
     const saved = localStorage.getItem('kt_dms_active_tab');
     if (saved && ['all-files', 'users', 'logs'].includes(saved)) {
       return saved;
@@ -171,7 +206,11 @@ export const DMSProvider = ({ children }) => {
     return 'all-files';
   });
   const [searchQuery, setSearchQuery] = useState('');
-  const [selectedProject, setSelectedProject] = useState(() => {
+  const [selectedProject, setSelectedProjectState] = useState(() => {
+    if (typeof window !== 'undefined' && window.location.hash) {
+      const parsed = parseDMSHash(window.location.hash);
+      if (parsed.projectId) return parsed.projectId;
+    }
     return localStorage.getItem('kt_dms_selected_project') || null;
   });
   const [toasts, setToasts] = useState([]);
@@ -218,15 +257,17 @@ export const DMSProvider = ({ children }) => {
     return [];
   });
 
-  const [currentFolderId, setCurrentFolderId] = useState(null);
+  const [currentFolderId, setCurrentFolderIdState] = useState(() => {
+    if (typeof window !== 'undefined' && window.location.hash) {
+      const parsed = parseDMSHash(window.location.hash);
+      if (parsed.folderId) return parsed.folderId;
+    }
+    return null;
+  });
 
   useEffect(() => {
     localStorage.setItem('kt_dms_folders', JSON.stringify(folders));
   }, [folders]);
-
-  useEffect(() => {
-    setCurrentFolderId(null);
-  }, [selectedProject]);
 
   useEffect(() => {
     localStorage.setItem('kt_dms_logs', JSON.stringify(logs));
@@ -240,19 +281,97 @@ export const DMSProvider = ({ children }) => {
     }
   }, [currentUserId]);
 
-  useEffect(() => {
-    if (activeTab) {
-      localStorage.setItem('kt_dms_active_tab', activeTab);
+  const scheduleHistorySync = useCallback((tab, projId, fldId) => {
+    if (isNavigatingFromPopStateRef.current || typeof window === 'undefined') return;
+    if (pendingHistoryUpdateRef.current) {
+      cancelAnimationFrame(pendingHistoryUpdateRef.current);
     }
-  }, [activeTab]);
+    pendingHistoryUpdateRef.current = requestAnimationFrame(() => {
+      const targetHash = buildDMSHash(tab, tab === 'all-files' ? projId : null, tab === 'all-files' ? fldId : null);
+      if (window.location.hash !== targetHash) {
+        window.history.pushState(
+          { tab, projectId: tab === 'all-files' ? projId : null, folderId: tab === 'all-files' ? fldId : null },
+          '',
+          targetHash
+        );
+      }
+    });
+  }, []);
 
-  useEffect(() => {
-    if (selectedProject) {
-      localStorage.setItem('kt_dms_selected_project', selectedProject);
+  const setActiveTab = useCallback((tab) => {
+    setActiveTabState(tab);
+    localStorage.setItem('kt_dms_active_tab', tab);
+    const nextProj = tab === 'all-files' ? selectedProject : null;
+    const nextFld = tab === 'all-files' ? currentFolderId : null;
+    scheduleHistorySync(tab, nextProj, nextFld);
+  }, [selectedProject, currentFolderId, scheduleHistorySync]);
+
+  const setSelectedProject = useCallback((projId) => {
+    setSelectedProjectState(projId);
+    setCurrentFolderIdState(null);
+    if (projId) {
+      localStorage.setItem('kt_dms_selected_project', projId);
     } else {
       localStorage.removeItem('kt_dms_selected_project');
     }
-  }, [selectedProject]);
+    scheduleHistorySync(activeTab, projId, null);
+  }, [activeTab, scheduleHistorySync]);
+
+  const setCurrentFolderId = useCallback((fldId) => {
+    setCurrentFolderIdState(fldId);
+    scheduleHistorySync(activeTab, selectedProject, fldId);
+  }, [activeTab, selectedProject, scheduleHistorySync]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    if (!window.history.state && isAuthenticated) {
+      const initialHash = buildDMSHash(activeTab, selectedProject, currentFolderId);
+      window.history.replaceState(
+        { tab: activeTab, projectId: selectedProject, folderId: currentFolderId, root: true },
+        '',
+        initialHash
+      );
+    }
+
+    const handlePopState = (e) => {
+      if (e.state?.isModal) return;
+
+      isNavigatingFromPopStateRef.current = true;
+      const parsed = parseDMSHash(window.location.hash);
+      const nextTab = parsed.tab || e.state?.tab || 'all-files';
+      const nextProj = parsed.projectId !== undefined ? parsed.projectId : (e.state?.projectId || null);
+      const nextFld = parsed.folderId !== undefined ? parsed.folderId : (e.state?.folderId || null);
+
+      setActiveTabState(nextTab);
+      setSelectedProjectState(nextProj);
+      setCurrentFolderIdState(nextFld);
+
+      localStorage.setItem('kt_dms_active_tab', nextTab);
+      if (nextProj) {
+        localStorage.setItem('kt_dms_selected_project', nextProj);
+      } else {
+        localStorage.removeItem('kt_dms_selected_project');
+      }
+
+      if (isAuthenticated && !window.location.hash) {
+        window.history.replaceState(
+          { tab: 'all-files', projectId: null, folderId: null, root: true },
+          '',
+          '#files'
+        );
+      }
+
+      setTimeout(() => {
+        isNavigatingFromPopStateRef.current = false;
+      }, 50);
+    };
+
+    window.addEventListener('popstate', handlePopState);
+    return () => {
+      window.removeEventListener('popstate', handlePopState);
+    };
+  }, [activeTab, selectedProject, currentFolderId, isAuthenticated]);
 
   // Multi-tab synchronization: Sync data collections across tabs, but keep active tab session isolated
   useEffect(() => {
@@ -1105,6 +1224,9 @@ export const DMSProvider = ({ children }) => {
         setIsAuthenticated(true);
         localStorage.setItem('kt_dms_auth', 'true');
         localStorage.setItem('kt_dms_active_user_id', activeAdmin.id);
+        if (typeof window !== 'undefined') {
+          window.history.replaceState({ tab: 'all-files', root: true }, '', '#files');
+        }
 
         loadBackendAuditLogs();
         addToast(adminRes.message || `Welcome back, ${activeAdmin.name}!`, 'success');
@@ -1215,6 +1337,9 @@ export const DMSProvider = ({ children }) => {
           setIsAuthenticated(true);
           localStorage.setItem('kt_dms_auth', 'true');
           localStorage.setItem('kt_dms_active_user_id', activeMember.id);
+          if (typeof window !== 'undefined') {
+            window.history.replaceState({ tab: 'all-files', root: true }, '', '#files');
+          }
 
           loadBackendAuditLogs();
           addToast(userRes.message || `Welcome back, ${activeMember.name}!`, 'success');
@@ -1264,6 +1389,9 @@ export const DMSProvider = ({ children }) => {
     localStorage.removeItem('kt_dms_selected_project');
     setActiveTab('all-files');
     setSelectedProject(null);
+    if (typeof window !== 'undefined') {
+      window.history.replaceState(null, '', window.location.pathname);
+    }
     addToast('You have been logged out.', 'info');
   };
 

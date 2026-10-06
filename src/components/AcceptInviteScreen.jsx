@@ -88,7 +88,7 @@ export const AcceptInviteScreen = () => {
       return;
     }
 
-    if (!mobile.trim() || mobile.trim().length < 10) {
+    if (!mobile.trim() || mobile.trim().length !== 10) {
       setErrorMsg('Please enter a valid 10-digit mobile number.');
       return;
     }
@@ -239,7 +239,7 @@ export const AcceptInviteScreen = () => {
                 <input
                   type="text"
                   required
-                  placeholder="e.g. John Doe"
+                  placeholder="e.g. Raja"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                   className="w-full pl-10 pr-4 py-2.5 text-xs sm:text-sm bg-slate-50 hover:bg-slate-100/60 focus:bg-white text-slate-800 border border-slate-200 rounded-xl focus:outline-hidden focus:ring-2 focus:ring-[#00A3E0]/30 focus:border-[#00A3E0] transition-all"
@@ -256,10 +256,13 @@ export const AcceptInviteScreen = () => {
                 <Phone className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
                 <input
                   type="tel"
+                  inputMode="numeric"
+                  maxLength={10}
+                  pattern="[0-9]{10}"
                   required
                   placeholder="e.g. 9876543210"
                   value={mobile}
-                  onChange={(e) => setMobile(e.target.value)}
+                  onChange={(e) => setMobile(e.target.value.replace(/\D/g, '').slice(0, 10))}
                   className="w-full pl-10 pr-4 py-2.5 text-xs sm:text-sm bg-slate-50 hover:bg-slate-100/60 focus:bg-white text-slate-800 border border-slate-200 rounded-xl focus:outline-hidden focus:ring-2 focus:ring-[#00A3E0]/30 focus:border-[#00A3E0] transition-all"
                 />
               </div>
