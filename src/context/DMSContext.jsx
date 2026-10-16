@@ -84,6 +84,34 @@ export const DMSProvider = ({ children }) => {
       );
       localStorage.setItem('kt_dms_users', JSON.stringify(cleaned));
     }
+
+    // Self-healing: if no admin-token and no admin-email, ensure this session is not marked as Admin
+    const curAdminToken = localStorage.getItem('admin-token');
+    const curAdminEmail = localStorage.getItem('admin-email');
+    const curAuthRole = localStorage.getItem('kt_dms_auth_role');
+    const activeUserId = localStorage.getItem('kt_dms_active_user_id');
+    const activeUserEmail = (localStorage.getItem('kt_dms_user_email') || '').toLowerCase();
+
+    if (!curAdminToken && !curAdminEmail) {
+      if (curAuthRole === 'Admin') {
+        localStorage.setItem('kt_dms_auth_role', 'Member');
+      }
+      const rawUsers = localStorage.getItem('kt_dms_users');
+      if (rawUsers) {
+        try {
+          const parsed = JSON.parse(rawUsers);
+          const sanitized = parsed.map((u) => {
+            const uEmail = (u.email || '').toLowerCase();
+            const uId = String(u.id || u._id || '');
+            if ((activeUserEmail && uEmail === activeUserEmail) || (activeUserId && uId === String(activeUserId))) {
+              return { ...u, role: 'Member' };
+            }
+            return u;
+          });
+          localStorage.setItem('kt_dms_users', JSON.stringify(sanitized));
+        } catch {}
+      }
+    }
   } catch {}
 
   const [users, setUsers] = useState(() => {
@@ -91,6 +119,7 @@ export const DMSProvider = ({ children }) => {
     const currentAdminEmail = (localStorage.getItem('admin-email') || '').toLowerCase();
     const currentAdminToken = localStorage.getItem('admin-token');
     const currentAdminName = localStorage.getItem('admin-name');
+    const authRole = localStorage.getItem('kt_dms_auth_role');
 
     let deletedUserEmails = [];
     let deletedUserIds = [];
@@ -101,7 +130,7 @@ export const DMSProvider = ({ children }) => {
 
     const emailPrefix = currentAdminEmail ? currentAdminEmail.split('@')[0] : '';
     const displayName = currentAdminName || (emailPrefix ? emailPrefix.charAt(0).toUpperCase() + emailPrefix.slice(1) : 'Admin');
-    const activeAdmin = currentAdminEmail ? {
+    const activeAdmin = (currentAdminEmail && authRole !== 'Member') ? {
       id: currentAdminToken ? `u-${currentAdminToken}` : 'u-admin',
       name: displayName,
       email: currentAdminEmail,
@@ -434,16 +463,17 @@ export const DMSProvider = ({ children }) => {
           }
         } catch {}
 
-        const currentAdminEmail = (localStorage.getItem('admin-email') || currentUser?.email || '').toLowerCase();
-        const currentAdminToken = localStorage.getItem('admin-token') || (currentUser?.id?.startsWith('u-') ? currentUser.id.replace('u-', '') : currentUser?.id);
+        const currentAdminEmail = (localStorage.getItem('admin-email') || '').toLowerCase();
+        const currentAdminToken = localStorage.getItem('admin-token');
+        const authRole = localStorage.getItem('kt_dms_auth_role');
         const emailPrefix = currentAdminEmail ? currentAdminEmail.split('@')[0] : '';
-        const adminDisplayName = localStorage.getItem('admin-name') || currentUser?.name || (emailPrefix ? emailPrefix.charAt(0).toUpperCase() + emailPrefix.slice(1) : 'Admin');
-        const adminMember = {
+        const adminDisplayName = localStorage.getItem('admin-name') || (emailPrefix ? emailPrefix.charAt(0).toUpperCase() + emailPrefix.slice(1) : 'Admin');
+        const adminMember = (currentAdminEmail && authRole !== 'Member') ? {
           userId: currentAdminToken ? (currentAdminToken.startsWith('u-') ? currentAdminToken : `u-${currentAdminToken}`) : 'u-admin',
           name: adminDisplayName,
           email: currentAdminEmail,
           permissions: { canView: true, canUpload: true, canEdit: true, canDelete: true, canDownload: true },
-        };
+        } : null;
 
         let localUsersList = [];
         try {
@@ -526,11 +556,13 @@ export const DMSProvider = ({ children }) => {
               }
             }
 
-            // Always ensure the project includes the administrator
-            if (!finalProjMembers || finalProjMembers.length === 0) {
-              finalProjMembers = [adminMember];
-            } else if (!finalProjMembers.some((m) => (m.email || '').toLowerCase() === currentAdminEmail)) {
-              finalProjMembers = [adminMember, ...finalProjMembers];
+            // Ensure the project includes the administrator if logged in as Admin
+            if (adminMember && currentAdminEmail) {
+              if (!finalProjMembers || finalProjMembers.length === 0) {
+                finalProjMembers = [adminMember];
+              } else if (!finalProjMembers.some((m) => (m.email || '').toLowerCase() === currentAdminEmail)) {
+                finalProjMembers = [adminMember, ...finalProjMembers];
+              }
             }
 
             let docs = [];
@@ -675,12 +707,13 @@ export const DMSProvider = ({ children }) => {
 
         // 2. Update users state with real registered members from MongoDB
         setUsers(() => {
-          const currentAdminEmail = (localStorage.getItem('admin-email') || currentUser?.email || '').toLowerCase();
+          const currentAdminEmail = (localStorage.getItem('admin-email') || '').toLowerCase();
           const currentAdminToken = localStorage.getItem('admin-token');
+          const authRole = localStorage.getItem('kt_dms_auth_role');
           const emailPrefix = currentAdminEmail ? currentAdminEmail.split('@')[0] : '';
-          const displayName = localStorage.getItem('admin-name') || currentUser?.name || (emailPrefix ? emailPrefix.charAt(0).toUpperCase() + emailPrefix.slice(1) : 'Admin');
+          const displayName = localStorage.getItem('admin-name') || (emailPrefix ? emailPrefix.charAt(0).toUpperCase() + emailPrefix.slice(1) : 'Admin');
 
-          const activeAdmin = currentAdminEmail ? {
+          const activeAdmin = (currentAdminEmail && authRole !== 'Member') ? {
             id: currentAdminToken ? (currentAdminToken.startsWith('u-') ? currentAdminToken : `u-${currentAdminToken}`) : 'u-admin',
             name: displayName,
             email: currentAdminEmail,
@@ -712,7 +745,7 @@ export const DMSProvider = ({ children }) => {
             if (deletedUserEmails.includes(emailKey) || deletedUserIds.includes(buId)) {
               return;
             }
-            if (emailKey === currentAdminEmail || emailKey === 'admin1@gmail.com') {
+            if ((currentAdminEmail && emailKey === currentAdminEmail) || emailKey === 'admin1@gmail.com') {
               return;
             }
 
@@ -1065,31 +1098,87 @@ export const DMSProvider = ({ children }) => {
   }, [loadBackendProjects, loadBackendAuditLogs]);
 
   const currentUser = useMemo(() => {
-    const found = users.find((u) => u.id === currentUserId);
-    if (found) return found;
-    if (users.length > 0) return users[0];
+    const savedRole = localStorage.getItem('kt_dms_auth_role') || (localStorage.getItem('admin-token') ? 'Admin' : 'Member');
+    const savedAdminEmail = (localStorage.getItem('admin-email') || '').toLowerCase();
+    const savedUserEmail = (localStorage.getItem('kt_dms_user_email') || '').toLowerCase();
+    const activeEmail = savedRole === 'Admin' ? savedAdminEmail : savedUserEmail;
+    const activeId = currentUserId || localStorage.getItem('kt_dms_active_user_id');
 
-    const savedEmail = localStorage.getItem('admin-email') || '';
-    const savedToken = localStorage.getItem('admin-token');
-    const emailPrefix = savedEmail ? savedEmail.split('@')[0] : '';
-    const savedName = localStorage.getItem('admin-name') || (emailPrefix ? emailPrefix.charAt(0).toUpperCase() + emailPrefix.slice(1) : 'Admin');
+    // 1. Try to find by ID
+    let found = activeId
+      ? users.find((u) => String(u.id) === String(activeId) || String(u._id) === String(activeId))
+      : null;
+
+    // 2. If not found by ID, try finding by email
+    if (!found && activeEmail) {
+      found = users.find((u) => (u.email || '').toLowerCase() === activeEmail);
+    }
+
+    if (found) {
+      // Guard against corrupted state where a member was wrongly marked as Admin
+      if (savedRole === 'Member' && found.role === 'Admin') {
+        found = {
+          ...found,
+          role: 'Member',
+          permissions: {
+            canView: true,
+            canUpload: false,
+            canEdit: false,
+            canDelete: false,
+            canDownload: true,
+            canManageUsers: false,
+            canViewLogs: false,
+          },
+        };
+      }
+      return found;
+    }
+
+    // 3. Fallback when user record is not yet in users array:
+    if (savedRole === 'Admin' && (savedAdminEmail || localStorage.getItem('admin-token'))) {
+      const emailPrefix = savedAdminEmail ? savedAdminEmail.split('@')[0] : '';
+      const savedName = localStorage.getItem('admin-name') || (emailPrefix ? emailPrefix.charAt(0).toUpperCase() + emailPrefix.slice(1) : 'Admin');
+      const savedToken = localStorage.getItem('admin-token');
+      return {
+        id: activeId || (savedToken ? `u-${savedToken}` : 'u-admin'),
+        name: savedName,
+        email: savedAdminEmail,
+        role: 'Admin',
+        avatar: '/p1.jpg',
+        department: 'System Administration',
+        status: 'active',
+        projectIds: projects.map((p) => p.id),
+        permissions: {
+          canView: true,
+          canUpload: true,
+          canEdit: true,
+          canDelete: true,
+          canDownload: true,
+          canManageUsers: true,
+          canViewLogs: true,
+        },
+      };
+    }
+
+    // Default Member Fallback (NEVER fall back to Admin for regular users!)
+    const memberName = localStorage.getItem('kt_dms_user_name') || (savedUserEmail ? savedUserEmail.split('@')[0] : 'Member');
     return {
-      id: currentUserId || (savedToken ? `u-${savedToken}` : 'u-admin'),
-      name: savedName,
-      email: savedEmail,
-      role: 'Admin',
-      avatar: '/p1.jpg',
-      department: 'System Administration',
+      id: activeId || `u-${Date.now()}`,
+      name: memberName,
+      email: savedUserEmail,
+      role: 'Member',
+      avatar: '/p2.jpg',
+      department: 'Project Member',
       status: 'active',
-      projectIds: projects.map((p) => p.id),
+      projectIds: [],
       permissions: {
         canView: true,
-        canUpload: true,
-        canEdit: true,
-        canDelete: true,
+        canUpload: false,
+        canEdit: false,
+        canDelete: false,
         canDownload: true,
-        canManageUsers: true,
-        canViewLogs: true,
+        canManageUsers: false,
+        canViewLogs: false,
       },
     };
   }, [users, currentUserId, projects]);
@@ -1188,6 +1277,10 @@ export const DMSProvider = ({ children }) => {
         }
         localStorage.setItem('admin-email', loggedEmail);
         localStorage.setItem('admin-name', displayName);
+        localStorage.setItem('kt_dms_auth_role', 'Admin');
+        localStorage.removeItem('user-token');
+        localStorage.removeItem('kt_dms_user_email');
+        localStorage.removeItem('kt_dms_user_name');
 
         const activeAdmin = {
           id: adminId ? `u-${adminId}` : 'u-admin',
@@ -1237,7 +1330,7 @@ export const DMSProvider = ({ children }) => {
       try {
         const userRes = await loginUserService({ email: emailToSend, password });
         if (userRes && userRes.success) {
-          const userProjects = userRes.data.projects || [];
+          const userProjects = userRes.data?.projects || userRes.data?.user?.projects || [];
           const projectIds = userProjects.map((p) => p.projectId?._id || p.projectId?.id || p.projectId);
 
           // Add any new backend projects to projects state
@@ -1264,52 +1357,48 @@ export const DMSProvider = ({ children }) => {
             }
           });
 
+          const memberEmail = (userRes.data?.email || userRes.data?.user?.email || emailToSend).toLowerCase();
           let activeMember = users.find(
-            (u) => u.email?.toLowerCase() === (userRes.data?.email || emailToSend).toLowerCase()
+            (u) => u.email?.toLowerCase() === memberEmail
           );
 
           const realName =
-            userRes.data.name ||
+            userRes.data?.name ||
+            userRes.data?.user?.name ||
             (activeMember && activeMember.name && activeMember.name !== 'Pending Registration'
               ? activeMember.name
               : emailToSend.split('@')[0]);
-          const realId = userRes.data.id || (activeMember ? activeMember.id : `u-${Date.now()}`);
+          const realId =
+            userRes.data?._id ||
+            userRes.data?.id ||
+            userRes.data?.user?._id ||
+            userRes.data?.user?.id ||
+            (activeMember ? activeMember.id : `u-${Date.now()}`);
 
-          if (!activeMember) {
-            activeMember = {
-              id: realId,
-              name: realName,
-              email: userRes.data.email || emailToSend,
-              role: 'Member',
-              avatar: '/p2.jpg',
-              department: 'Project Member',
-              status: 'active',
-              projectIds: projectIds,
-              projects: userProjects,
-              permissions: {
-                canView: true,
-                canUpload: true,
-                canEdit: false,
-                canDelete: false,
-                canDownload: true,
-                canManageUsers: false,
-                canViewLogs: false,
-              },
-            };
-          } else {
-            activeMember = {
-              ...activeMember,
-              id: realId,
-              name: realName,
-              status: 'active',
-              projectIds: projectIds,
-              projects: userProjects,
-            };
-          }
+          activeMember = {
+            id: String(realId),
+            name: realName,
+            email: memberEmail,
+            role: 'Member',
+            avatar: '/p2.jpg',
+            department: 'Project Member',
+            status: 'active',
+            projectIds: projectIds,
+            projects: userProjects,
+            permissions: activeMember?.permissions || {
+              canView: true,
+              canUpload: true,
+              canEdit: false,
+              canDelete: false,
+              canDownload: true,
+              canManageUsers: false,
+              canViewLogs: false,
+            },
+          };
 
           // Update users state and localStorage
           setUsers((prev) => {
-            const emailKey = (activeMember.email || emailToSend).toLowerCase();
+            const emailKey = memberEmail;
             const exists = prev.some((u) => u.email?.toLowerCase() === emailKey);
             const updated = exists
               ? prev.map((u) => (u.email?.toLowerCase() === emailKey ? activeMember : u))
@@ -1320,7 +1409,7 @@ export const DMSProvider = ({ children }) => {
 
           // Mark invitation as accepted in state and storage
           setInvitations((prev) => {
-            const emailKey = (activeMember.email || emailToSend).toLowerCase();
+            const emailKey = memberEmail;
             const updated = prev.map((i) =>
               i.email?.toLowerCase() === emailKey
                 ? { ...i, status: 'accepted', acceptedAt: new Date().toISOString() }
@@ -1333,10 +1422,16 @@ export const DMSProvider = ({ children }) => {
           localStorage.removeItem('admin-token');
           localStorage.removeItem('admin-email');
           localStorage.removeItem('admin-name');
-          setCurrentUserId(activeMember.id);
-          setIsAuthenticated(true);
           localStorage.setItem('kt_dms_auth', 'true');
-          localStorage.setItem('kt_dms_active_user_id', activeMember.id);
+          localStorage.setItem('kt_dms_auth_role', 'Member');
+          localStorage.setItem('kt_dms_active_user_id', String(realId));
+          localStorage.setItem('kt_dms_user_email', memberEmail);
+          localStorage.setItem('kt_dms_user_name', realName);
+          if (userRes.data?.token || userRes.token) {
+            localStorage.setItem('user-token', userRes.data?.token || userRes.token);
+          }
+          setCurrentUserId(String(realId));
+          setIsAuthenticated(true);
           if (typeof window !== 'undefined') {
             window.history.replaceState({ tab: 'all-files', root: true }, '', '#files');
           }
@@ -1383,7 +1478,11 @@ export const DMSProvider = ({ children }) => {
     localStorage.removeItem('admin-token');
     localStorage.removeItem('admin-email');
     localStorage.removeItem('admin-name');
+    localStorage.removeItem('user-token');
     localStorage.removeItem('kt_dms_active_user_id');
+    localStorage.removeItem('kt_dms_auth_role');
+    localStorage.removeItem('kt_dms_user_email');
+    localStorage.removeItem('kt_dms_user_name');
     localStorage.setItem('kt_dms_auth', 'false');
     localStorage.removeItem('kt_dms_active_tab');
     localStorage.removeItem('kt_dms_selected_project');
@@ -1435,7 +1534,7 @@ export const DMSProvider = ({ children }) => {
       };
     }
 
-    const member = proj.members?.find((m) => m.userId === userId);
+    const member = proj.members?.find((m) => String(m.userId) === String(userId) || (user?.email && m.email && m.email.toLowerCase() === user.email.toLowerCase()));
     if (!member) {
       return {
         canView: false,
@@ -1466,7 +1565,7 @@ export const DMSProvider = ({ children }) => {
         (bp) => (bp.projectId?._id || bp.projectId?.id || bp.projectId) === p.id
       );
       if (inBackend) return true;
-      const member = p.members?.find((m) => m.userId === currentUser.id);
+      const member = p.members?.find((m) => String(m.userId) === String(currentUser.id) || (m.email && currentUser?.email && m.email.toLowerCase() === currentUser.email.toLowerCase()));
       return member && member.permissions?.canView !== false;
     });
   }, [projects, currentUser]);
@@ -2190,10 +2289,13 @@ export const DMSProvider = ({ children }) => {
       localStorage.removeItem('admin-email');
       localStorage.removeItem('admin-name');
       const finalUserId = targetUser ? targetUser.id : (invite?.userId || `u-${Date.now()}`);
-      setCurrentUserId(finalUserId);
+      setCurrentUserId(String(finalUserId));
       setIsAuthenticated(true);
       localStorage.setItem('kt_dms_auth', 'true');
-      localStorage.setItem('kt_dms_active_user_id', finalUserId);
+      localStorage.setItem('kt_dms_auth_role', 'Member');
+      localStorage.setItem('kt_dms_active_user_id', String(finalUserId));
+      localStorage.setItem('kt_dms_user_email', finalEmail.toLowerCase());
+      localStorage.setItem('kt_dms_user_name', registeredName);
     }
 
     // Reload backend projects so member records are fully synced

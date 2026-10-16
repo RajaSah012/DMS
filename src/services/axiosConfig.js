@@ -16,9 +16,15 @@ API.interceptors.request.use(
       config.url = config.url.substring(1);
     }
 
-    const token = localStorage.getItem("admin-token");
+    const token = localStorage.getItem("admin-token") || localStorage.getItem("user-token");
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
+    }
+
+    const activeUserId = localStorage.getItem("kt_dms_active_user_id");
+    if (activeUserId && !config.headers.userid) {
+      const cleanUserId = activeUserId.startsWith('u-') ? activeUserId.replace(/^u-/, '') : activeUserId;
+      config.headers.userid = cleanUserId;
     }
     return config;
   },
@@ -34,6 +40,7 @@ API.interceptors.response.use(
   (error) => {
     if (error.response?.status === 401) {
       localStorage.removeItem("admin-token");
+      localStorage.removeItem("user-token");
     }
 
     return Promise.reject(error);
