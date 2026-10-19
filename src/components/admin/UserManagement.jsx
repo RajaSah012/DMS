@@ -231,49 +231,47 @@ export const UserManagement = () => {
                         </span>
                       ) : (
                         <div className="flex flex-wrap items-center gap-1">
-                          <span
-                            className={`px-1.5 py-0.5 rounded text-[10px] font-semibold ${
-                              perms.canUpload
-                                ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                                : 'bg-slate-100 text-slate-400 line-through opacity-60'
-                            }`}
-                            title={perms.canUpload ? 'Can Upload' : 'No Upload'}
-                          >
-                            Upload
-                          </span>
+                          {perms.canUpload && (
+                            <span
+                              className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200"
+                              title="Can Upload"
+                            >
+                              Upload
+                            </span>
+                          )}
 
-                          <span
-                            className={`px-1.5 py-0.5 rounded text-[10px] font-semibold ${
-                              perms.canEdit
-                                ? 'bg-sky-50 text-sky-700 border border-sky-200'
-                                : 'bg-slate-100 text-slate-400 line-through opacity-60'
-                            }`}
-                            title={perms.canEdit ? 'Can Edit' : 'No Edit'}
-                          >
-                            Edit
-                          </span>
+                          {perms.canEdit && (
+                            <span
+                              className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-sky-50 text-sky-700 border border-sky-200"
+                              title="Can Edit"
+                            >
+                              Edit
+                            </span>
+                          )}
 
-                          <span
-                            className={`px-1.5 py-0.5 rounded text-[10px] font-semibold ${
-                              perms.canDelete
-                                ? 'bg-rose-50 text-rose-700 border border-rose-200'
-                                : 'bg-slate-100 text-slate-400 line-through opacity-60'
-                            }`}
-                            title={perms.canDelete ? 'Can Delete' : 'No Delete Permission'}
-                          >
-                            Delete
-                          </span>
+                          {perms.canDelete && (
+                            <span
+                              className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-rose-50 text-rose-700 border border-rose-200"
+                              title="Can Delete"
+                            >
+                              Delete
+                            </span>
+                          )}
 
-                          <span
-                            className={`px-1.5 py-0.5 rounded text-[10px] font-semibold ${
-                              perms.canDownload
-                                ? 'bg-indigo-50 text-indigo-700 border border-indigo-200'
-                                : 'bg-slate-100 text-slate-400 line-through opacity-60'
-                            }`}
-                            title={perms.canDownload ? 'Can Download' : 'No Download'}
-                          >
-                            Download
-                          </span>
+                          {perms.canDownload && (
+                            <span
+                              className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200"
+                              title="Can Download"
+                            >
+                              Download
+                            </span>
+                          )}
+
+                          {!perms.canUpload && !perms.canEdit && !perms.canDelete && !perms.canDownload && (
+                            <span className="text-[11px] text-slate-400 italic">
+                              No permissions
+                            </span>
+                          )}
                         </div>
                       )}
                     </td>

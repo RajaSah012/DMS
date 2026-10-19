@@ -946,7 +946,7 @@ export const DMSProvider = ({ children }) => {
     hasPrevPage: false,
   });
 
-  const loadBackendAuditLogs = useCallback(async (page = 1, limit = 10, projectId = null) => {
+  const loadBackendAuditLogs = useCallback(async (page = 1, limit = 50, projectId = null) => {
     try {
       const res = await getAuditLogsService(projectId, page, limit);
       if (res && res.success && Array.isArray(res.data)) {
@@ -957,24 +957,31 @@ export const DMSProvider = ({ children }) => {
         const mappedBackendLogs = res.data.map((bLog) => {
           let userName = 'System Admin';
           let userId = '';
+          let userEmail = '';
+          let adminId = '';
+          let adminEmail = '';
+
           if (bLog.userType === 'Admin' || bLog.adminId) {
-            const adminEmail = bLog.adminId?.email || localStorage.getItem('admin-email') || '';
+            adminEmail = bLog.adminId?.email || localStorage.getItem('admin-email') || '';
             const prefix = adminEmail ? adminEmail.split('@')[0] : '';
             userName = bLog.adminId?.name || (prefix ? prefix.charAt(0).toUpperCase() + prefix.slice(1) : 'Admin');
-            userId = bLog.adminId?._id || bLog.adminId || (localStorage.getItem('admin-token') ? `u-${localStorage.getItem('admin-token')}` : 'u-admin');
+            adminId = bLog.adminId?._id || bLog.adminId || (localStorage.getItem('admin-token') ? `u-${localStorage.getItem('admin-token')}` : 'u-admin');
+            userId = adminId;
           } else if (bLog.userId) {
             userName = bLog.userId.name || bLog.userId.email?.split('@')[0] || 'User';
             userId = bLog.userId._id || bLog.userId.id || bLog.userId;
+            userEmail = bLog.userId.email || '';
           }
 
           let actionLabel = bLog.action;
           let target = bLog.entityType || 'System';
           let detailsStr = '';
+          let det = null;
 
           if (typeof bLog.details === 'string') {
             detailsStr = bLog.details;
           } else if (bLog.details && typeof bLog.details === 'object') {
-            const det = bLog.details;
+            det = bLog.details;
             if (det.description) {
               detailsStr = det.description;
             } else if (det.fileName) {
@@ -991,6 +998,15 @@ export const DMSProvider = ({ children }) => {
             else if (det.projectName) target = det.projectName;
             else if (det.name) target = det.name;
           }
+
+          const targetEmail = (
+            det?.email || 
+            det?.targetEmail || 
+            det?.userEmail || 
+            (typeof target === 'string' && target.includes('@') ? target.split(' ')[0] : '') || 
+            ''
+          ).toLowerCase().trim();
+          const targetName = det?.name || det?.targetName || '';
 
           switch (bLog.action) {
             case 'UPLOAD_FILE':
@@ -1056,18 +1072,24 @@ export const DMSProvider = ({ children }) => {
           return {
             id: bLog._id,
             timestamp: bLog.createdAt || new Date().toISOString(),
-            userId,
+            userId: String(userId || ''),
+            userEmail: (userEmail || '').toLowerCase(),
+            adminId: String(adminId || ''),
+            adminEmail: (adminEmail || '').toLowerCase(),
             userName,
-            userRole: bLog.userType || 'User',
+            userRole: bLog.userType || (adminId ? 'Admin' : 'User'),
             action: bLog.action,
             actionLabel,
             target: target || bLog.projectId?.name || 'System',
+            targetEmail,
+            targetName,
             category: bLog.entityType || 'Activity',
             status: 'success',
             details: detailsStr || `Activity on ${bLog.entityType}`,
             isBackendLog: true,
             projectId: bLog.projectId?._id || bLog.projectId?.id || (typeof bLog.projectId === 'string' ? bLog.projectId : null),
-            projectName: bLog.projectId?.name || null,
+            projectName: bLog.projectId?.name || det?.projectName || null,
+            rawLog: bLog,
           };
         });
 
@@ -1190,8 +1212,15 @@ export const DMSProvider = ({ children }) => {
   }, [currentUser, activeTab]);
 
   const addToast = (message, type = 'success') => {
-    const id = Date.now().toString();
-    setToasts((prev) => [...prev, { id, message, type }]);
+    const id = Date.now().toString() + Math.random().toString(36).substring(2, 6);
+    setToasts((prev) => {
+      // Don't stack the exact same message if it's already active
+      if (prev.some((t) => t.message === message && t.type === type)) {
+        return prev;
+      }
+      const trimmed = prev.slice(-2);
+      return [...trimmed, { id, message, type }];
+    });
     setTimeout(() => {
       setToasts((prev) => prev.filter((t) => t.id !== id));
     }, 4000);

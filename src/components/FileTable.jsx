@@ -155,18 +155,31 @@ export const FileTable = ({ onPreview, onEdit, onDelete }) => {
           <span className="text-slate-400 font-medium text-[11px]">
             {activeProjectObj ? 'Project Privileges:' : 'Your Privileges:'}
           </span>
-          <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${activePrivileges.canUpload ? 'bg-sky-100 text-sky-800' : 'bg-slate-100 text-slate-400'}`}>
-            {activePrivileges.canUpload ? 'Upload' : 'No Upload'}
-          </span>
-          <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${activePrivileges.canEdit ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-400'}`}>
-            {activePrivileges.canEdit ? 'Edit' : 'No Edit'}
-          </span>
-          <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${activePrivileges.canDelete ? 'bg-rose-100 text-rose-800' : 'bg-slate-100 text-slate-400'}`}>
-            {activePrivileges.canDelete ? 'Delete' : 'No Delete'}
-          </span>
-          <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${activePrivileges.canDownload ? 'bg-indigo-100 text-indigo-800' : 'bg-slate-100 text-slate-400'}`}>
-            {activePrivileges.canDownload ? 'Download' : 'No Download'}
-          </span>
+          {activePrivileges.canUpload && (
+            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-sky-100 text-sky-800">
+              Upload
+            </span>
+          )}
+          {activePrivileges.canEdit && (
+            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800">
+              Edit
+            </span>
+          )}
+          {activePrivileges.canDelete && (
+            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-100 text-rose-800">
+              Delete
+            </span>
+          )}
+          {activePrivileges.canDownload && (
+            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-indigo-100 text-indigo-800">
+              Download
+            </span>
+          )}
+          {!activePrivileges.canUpload && !activePrivileges.canEdit && !activePrivileges.canDelete && !activePrivileges.canDownload && (
+            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-slate-500">
+              View Only
+            </span>
+          )}
         </div>
       </div>
 
