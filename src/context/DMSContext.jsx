@@ -1477,10 +1477,26 @@ export const DMSProvider = ({ children }) => {
           return false;
         }
 
-        const errorMsg =
-          userErr.response?.data?.message ||
-          adminErr.response?.data?.message ||
-          'Invalid email or password. Please check your credentials.';
+        const adminStatus = adminErr.response?.status;
+        const userStatus = userErr.response?.status;
+        const isServerOrNetworkError =
+          !adminErr.response ||
+          !userErr.response ||
+          adminStatus >= 500 ||
+          userStatus >= 500 ||
+          adminErr.code === 'ERR_NETWORK' ||
+          userErr.code === 'ERR_NETWORK';
+
+        let errorMsg = 'Invalid email or password. Please check your credentials.';
+
+        if (isServerOrNetworkError) {
+          errorMsg = 'Backend server (Render) is waking up. Please wait 15-20 seconds and click Sign In again.';
+        } else {
+          errorMsg =
+            userErr.response?.data?.message ||
+            adminErr.response?.data?.message ||
+            'Invalid email or password. Please check your credentials.';
+        }
 
         addToast(errorMsg, 'error');
         return false;
