@@ -6,7 +6,7 @@ import API from "./axiosConfig";
  * @param {string} [projectId] - Optional project ID filter
  * @returns {Promise<{ success: boolean, count: number, data: Array }>}
  */
-export const getAuditLogsService = async (projectId = null, page = 1, limit = 10) => {
+export const getAuditLogsService = async (projectId = null, page = 1, limit = 500) => {
   try {
     const params = { page, limit };
     if (projectId) params.projectId = projectId;

@@ -46,26 +46,7 @@ export const ProjectModal = ({
     if (project) {
       setName(project.name || '');
       const projMembers = Array.isArray(project.members) ? project.members : [];
-      if (projMembers.length > 0) {
-        setMembers(JSON.parse(JSON.stringify(projMembers)));
-      } else {
-        const initial = users.map((u) => {
-          const isAdmin = u.role === 'Admin';
-          return {
-            userId: u.id,
-            name: u.name,
-            email: u.email,
-            permissions: {
-              canView: true,
-              canUpload: isAdmin || u.permissions?.canUpload !== false,
-              canEdit: isAdmin || !!u.permissions?.canEdit,
-              canDelete: isAdmin || !!u.permissions?.canDelete,
-              canDownload: isAdmin || u.permissions?.canDownload !== false,
-            },
-          };
-        });
-        setMembers(initial);
-      }
+      setMembers(JSON.parse(JSON.stringify(projMembers)));
     } else {
       setName('');
       const initial = users.map((u) => {

@@ -33,6 +33,7 @@ const MainContent = () => {
     files, 
     users, 
     logs,
+    auditPagination,
     canUpload
   } = useDMS();
 
@@ -132,7 +133,13 @@ const MainContent = () => {
                     </div>
                     <div className="min-w-0">
                       <span className="text-[9px] sm:text-[11px] font-medium text-slate-400 block truncate">Audit Logs</span>
-                      <p className="text-sm sm:text-xl font-bold text-[#0A2540]">{logs.length}</p>
+                      <p className="text-sm sm:text-xl font-bold text-[#0A2540]">
+                        {Number(
+                          auditPagination?.total !== undefined && auditPagination.total > 0
+                            ? auditPagination.total
+                            : (logs.length > 0 ? logs.length : (Number(localStorage.getItem('kt_dms_audit_total')) || 0))
+                        ).toLocaleString()}
+                      </p>
                     </div>
                   </div>
                 </div>

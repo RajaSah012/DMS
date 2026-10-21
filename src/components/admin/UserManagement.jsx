@@ -13,7 +13,9 @@ import {
   UserCheck,
   ShieldAlert,
   User,
-  Trash2
+  Trash2,
+  Search,
+  FolderKanban
 } from 'lucide-react';
 import { useDMS } from '../../context/DMSContext';
 import { AddUserModal } from './AddUserModal';
@@ -34,6 +36,9 @@ export const UserManagement = () => {
 
   const [isAddUserOpen, setIsAddUserOpen] = useState(false);
   const [selectedUserForPerms, setSelectedUserForPerms] = useState(null);
+  const [selectedProjectFilter, setSelectedProjectFilter] = useState('all');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [editingProjectTarget, setEditingProjectTarget] = useState('all');
 
   const displayedUsers = useMemo(() => {
     let deletedEmails = [];
@@ -49,12 +54,30 @@ export const UserManagement = () => {
       if (email && deletedEmails.includes(email)) return false;
       if (uid && deletedIds.includes(uid)) return false;
 
-      return (
-        u.role !== 'Admin' ||
-        u.email?.toLowerCase() === currentUser.email?.toLowerCase()
-      );
+      const isVisibleRole = u.role !== 'Admin' || u.email?.toLowerCase() === currentUser.email?.toLowerCase();
+      if (!isVisibleRole) return false;
+
+      // 1. Search Query filter
+      if (searchQuery.trim()) {
+        const q = searchQuery.toLowerCase().trim();
+        const matchName = (u.name || '').toLowerCase().includes(q);
+        const matchEmail = (u.email || '').toLowerCase().includes(q);
+        if (!matchName && !matchEmail) return false;
+      }
+
+      // 2. Project Filter
+      if (selectedProjectFilter !== 'all') {
+        if (u.role === 'Admin') return true;
+        const targetProj = projects.find((p) => p.id === selectedProjectFilter);
+        const isMember = targetProj?.members?.some(
+          (m) => m.userId === u.id || (m.email && u.email && m.email.toLowerCase() === u.email.toLowerCase())
+        );
+        if (!isMember) return false;
+      }
+
+      return true;
     });
-  }, [users, currentUser]);
+  }, [users, currentUser, searchQuery, selectedProjectFilter, projects]);
 
   const { activeCount, adminCount } = useMemo(() => {
     let active = 0;
@@ -148,13 +171,54 @@ export const UserManagement = () => {
 
       </div>
 
+      {/* Search and Project Filter Toolbar */}
+      <div className="bg-white p-3.5 sm:p-4 rounded-2xl border border-slate-200 shadow-xs flex flex-col md:flex-row items-center gap-3">
+        <div className="relative flex-1 w-full">
+          <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+          <input
+            type="text"
+            placeholder="Search team members by name or email..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="w-full pl-10 pr-4 py-2.5 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:outline-hidden focus:ring-2 focus:ring-[#00A3E0]/30"
+          />
+        </div>
+
+        <div className="flex items-center gap-2 w-full md:w-auto shrink-0">
+          <div className="relative w-full md:w-64">
+            <FolderKanban className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-[#00A3E0] pointer-events-none" />
+            <select
+              value={selectedProjectFilter}
+              onChange={(e) => setSelectedProjectFilter(e.target.value)}
+              className="w-full pl-10 pr-8 py-2.5 text-xs font-semibold bg-slate-50 border border-slate-200 rounded-xl text-slate-700 focus:bg-white focus:outline-hidden focus:ring-2 focus:ring-[#00A3E0]/30 cursor-pointer appearance-none"
+            >
+              <option value="all">All Projects (Overview)</option>
+              {projects.map((p) => (
+                <option key={p.id} value={p.id}>
+                  Project: {p.name}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+      </div>
+
       <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
-        <div className="p-4 sm:px-6 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
-          <h3 className="text-sm font-bold text-[#0A2540]">
-            All Organization Accounts ({displayedUsers.length})
-          </h3>
+        <div className="p-4 sm:px-6 border-b border-slate-100 flex flex-wrap items-center justify-between gap-2 bg-slate-50/50">
+          <div className="flex items-center gap-2 flex-wrap">
+            <h3 className="text-sm font-bold text-[#0A2540]">
+              All Organization Accounts ({displayedUsers.length})
+            </h3>
+            {selectedProjectFilter !== 'all' && (
+              <span className="text-[10px] px-2 py-0.5 rounded-full bg-[#0A2540] text-white font-semibold">
+                Showing: {projects.find((p) => p.id === selectedProjectFilter)?.name}
+              </span>
+            )}
+          </div>
           <span className="text-[11px] text-slate-400">
-            Click 'Edit Permissions' to customize actions per member
+            {selectedProjectFilter !== 'all'
+              ? `Displaying specific permissions for "${projects.find((p) => p.id === selectedProjectFilter)?.name}"`
+              : "Showing permissions per assigned project"}
           </span>
         </div>
 
@@ -205,19 +269,26 @@ export const UserManagement = () => {
                         <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-slate-700 border border-slate-200">
                           All Projects (Root Admin)
                         </span>
+                      ) : selectedProjectFilter !== 'all' ? (
+                        <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-sky-100 text-[#0284C7] border border-sky-200">
+                          {projects.find((p) => p.id === selectedProjectFilter)?.name}
+                        </span>
                       ) : (
                         <div className="flex flex-wrap gap-1 max-w-xs">
                           {projects
-                            .filter((p) => p.members?.some((m) => m.userId === user.id))
+                            .filter((p) => p.members?.some((m) => m.userId === user.id || (m.email && user.email && m.email.toLowerCase() === user.email.toLowerCase())))
                             .map((p) => (
-                              <span
+                              <button
                                 key={p.id}
-                                className="px-2 py-0.5 rounded-md text-[10px] font-semibold bg-sky-50 text-[#0284C7] border border-sky-100"
+                                type="button"
+                                onClick={() => setSelectedProjectFilter(p.id)}
+                                className="px-2 py-0.5 rounded-md text-[10px] font-semibold bg-sky-50 text-[#0284C7] border border-sky-100 hover:bg-sky-100 cursor-pointer transition-colors"
+                                title={`Click to filter by ${p.name}`}
                               >
                                 {p.name}
-                              </span>
+                              </button>
                             ))}
-                          {projects.filter((p) => p.members?.some((m) => m.userId === user.id)).length === 0 && (
+                          {projects.filter((p) => p.members?.some((m) => m.userId === user.id || (m.email && user.email && m.email.toLowerCase() === user.email.toLowerCase()))).length === 0 && (
                             <span className="text-[11px] text-slate-400 italic">No assigned projects</span>
                           )}
                         </div>
@@ -229,50 +300,101 @@ export const UserManagement = () => {
                         <span className="inline-flex items-center text-[11px] font-bold text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-md border border-emerald-200">
                           Full System Access
                         </span>
+                      ) : selectedProjectFilter !== 'all' ? (
+                        (() => {
+                          const proj = projects.find((p) => p.id === selectedProjectFilter);
+                          const m = proj?.members?.find((mem) => mem.userId === user.id || (mem.email && user.email && mem.email.toLowerCase() === user.email.toLowerCase()));
+                          const pPerms = m?.permissions || {};
+                          const hasAny = pPerms.canUpload || pPerms.canEdit || pPerms.canDelete || pPerms.canDownload;
+
+                          if (!m || !hasAny) {
+                            return <span className="text-[11px] text-slate-400 italic">No permissions in {proj?.name}</span>;
+                          }
+
+                          return (
+                            <div className="flex flex-wrap items-center gap-1">
+                              {pPerms.canUpload && (
+                                <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                                  Upload
+                                </span>
+                              )}
+                              {pPerms.canEdit && (
+                                <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-sky-50 text-sky-700 border border-sky-200">
+                                  Edit
+                                </span>
+                              )}
+                              {pPerms.canDelete && (
+                                <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-rose-50 text-rose-700 border border-rose-200">
+                                  Delete
+                                </span>
+                              )}
+                              {pPerms.canDownload && (
+                                <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200">
+                                  Download
+                                </span>
+                              )}
+                            </div>
+                          );
+                        })()
                       ) : (
-                        <div className="flex flex-wrap items-center gap-1">
-                          {perms.canUpload && (
-                            <span
-                              className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200"
-                              title="Can Upload"
-                            >
-                              Upload
-                            </span>
-                          )}
+                        (() => {
+                          const userAssignedProjects = projects.filter((p) =>
+                            p.members?.some((m) => m.userId === user.id || (m.email && user.email && m.email.toLowerCase() === user.email.toLowerCase()))
+                          );
 
-                          {perms.canEdit && (
-                            <span
-                              className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-sky-50 text-sky-700 border border-sky-200"
-                              title="Can Edit"
-                            >
-                              Edit
-                            </span>
-                          )}
+                          if (userAssignedProjects.length === 0) {
+                            return <span className="text-[11px] text-slate-400 italic">No assigned projects</span>;
+                          }
 
-                          {perms.canDelete && (
-                            <span
-                              className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-rose-50 text-rose-700 border border-rose-200"
-                              title="Can Delete"
-                            >
-                              Delete
-                            </span>
-                          )}
+                          return (
+                            <div className="space-y-1.5 max-w-md">
+                              {userAssignedProjects.map((p) => {
+                                const m = p.members?.find((mem) => mem.userId === user.id || (mem.email && user.email && mem.email.toLowerCase() === user.email.toLowerCase()));
+                                const pPerms = m?.permissions || {};
+                                const hasAny = pPerms.canUpload || pPerms.canEdit || pPerms.canDelete || pPerms.canDownload;
 
-                          {perms.canDownload && (
-                            <span
-                              className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200"
-                              title="Can Download"
-                            >
-                              Download
-                            </span>
-                          )}
-
-                          {!perms.canUpload && !perms.canEdit && !perms.canDelete && !perms.canDownload && (
-                            <span className="text-[11px] text-slate-400 italic">
-                              No permissions
-                            </span>
-                          )}
-                        </div>
+                                return (
+                                  <div key={p.id} className="flex items-center gap-1.5 flex-wrap">
+                                    <button
+                                      type="button"
+                                      onClick={() => setSelectedProjectFilter(p.id)}
+                                      className="text-[10px] font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 px-1.5 py-0.5 rounded border border-slate-200 shrink-0 cursor-pointer transition-colors"
+                                      title={`Filter view by ${p.name}`}
+                                    >
+                                      {p.name}:
+                                    </button>
+                                    {hasAny ? (
+                                      <div className="flex items-center gap-1 flex-wrap">
+                                        {pPerms.canUpload && (
+                                          <span className="px-1.5 py-0.2 rounded text-[9px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                                            Upload
+                                          </span>
+                                        )}
+                                        {pPerms.canEdit && (
+                                          <span className="px-1.5 py-0.2 rounded text-[9px] font-semibold bg-sky-50 text-sky-700 border border-sky-200">
+                                            Edit
+                                          </span>
+                                        )}
+                                        {pPerms.canDelete && (
+                                          <span className="px-1.5 py-0.2 rounded text-[9px] font-semibold bg-rose-50 text-rose-700 border border-rose-200">
+                                            Delete
+                                          </span>
+                                        )}
+                                        {pPerms.canDownload && (
+                                          <span className="px-1.5 py-0.2 rounded text-[9px] font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200">
+                                            Download
+                                          </span>
+                                        )}
+                                      </div>
+                                    ) : (
+                                      <span className="text-[10px] text-slate-400 italic">View only</span>
+                                    )}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          );
+                        })()
                       )}
                     </td>
 
@@ -311,7 +433,10 @@ export const UserManagement = () => {
                           </button>
                         )}
                         <button
-                          onClick={() => setSelectedUserForPerms(user)}
+                          onClick={() => {
+                            setSelectedUserForPerms(user);
+                            setEditingProjectTarget(selectedProjectFilter);
+                          }}
                           disabled={isAdmin}
                           className={`px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-all ${
                             isAdmin
@@ -357,6 +482,7 @@ export const UserManagement = () => {
         user={selectedUserForPerms}
         isOpen={!!selectedUserForPerms}
         onClose={() => setSelectedUserForPerms(null)}
+        initialProjectId={editingProjectTarget}
       />
 
     </div>

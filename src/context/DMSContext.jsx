@@ -480,14 +480,28 @@ export const DMSProvider = ({ children }) => {
           localUsersList = JSON.parse(localStorage.getItem('kt_dms_users') || '[]');
         } catch {}
 
+        let removedProjMembersMap = {};
+        try {
+          removedProjMembersMap = JSON.parse(localStorage.getItem('kt_dms_removed_project_members') || '{}');
+        } catch {}
+
         const projectsWithMembers = await Promise.all(
           validBackendProjects.map(async (bp) => {
+            const removedListForThisProj = (removedProjMembersMap[bp._id] || []).map((x) => String(x).toLowerCase());
+
             let members = [];
             try {
               const memRes = await getProjectMembersService(bp._id, 1, 100);
               if (memRes && memRes.success && Array.isArray(memRes.data)) {
                 members = memRes.data
-                  .filter((m) => m.userId)
+                  .filter((m) => {
+                    if (!m.userId) return false;
+                    const uId = String(m.userId._id || m.userId.id || m.userId).toLowerCase();
+                    const email = (m.userId.email || '').toLowerCase();
+                    if (removedListForThisProj.includes(uId) || removedListForThisProj.includes(email)) return false;
+                    if (Array.isArray(m.permissions) && (m.permissions.length === 0 || !m.permissions.includes('read'))) return false;
+                    return true;
+                  })
                   .map((m) => ({
                     userId: m.userId._id || m.userId.id || m.userId,
                     name: m.userId.name,
@@ -504,8 +518,12 @@ export const DMSProvider = ({ children }) => {
 
             if (localProj && Array.isArray(localProj.members) && localProj.members.length > 0) {
               if (!members || members.length === 0) {
-                // If backend has not yet indexed or returned members, retain local members
-                finalProjMembers = localProj.members;
+                // If backend has not yet indexed or returned members, retain local members except removed
+                finalProjMembers = localProj.members.filter((lm) => {
+                  const email = (lm.email || '').toLowerCase();
+                  const uid = String(lm.userId || '').toLowerCase();
+                  return !removedListForThisProj.includes(email) && !removedListForThisProj.includes(uid);
+                });
               } else {
                 // Merge backend members with any local members
                 const backendEmails = new Set(
@@ -517,7 +535,8 @@ export const DMSProvider = ({ children }) => {
 
                 const missingFromBackend = localProj.members.filter((lm) => {
                   const email = (lm.email || '').toLowerCase();
-                  const uid = String(lm.userId);
+                  const uid = String(lm.userId || '').toLowerCase();
+                  if (removedListForThisProj.includes(email) || removedListForThisProj.includes(uid)) return false;
                   if (email && backendEmails.has(email)) return false;
                   if (uid && backendIds.has(uid)) return false;
                   return true;
@@ -527,12 +546,12 @@ export const DMSProvider = ({ children }) => {
               }
             }
 
-            // Filter out any deleted members
+            // Filter out any deleted or unassigned members
             finalProjMembers = finalProjMembers.filter((m) => {
               const email = (m.email || '').toLowerCase();
-              const uid = String(m.userId);
-              if (email && deletedUserEmails.includes(email)) return false;
-              if (uid && deletedUserIds.includes(uid)) return false;
+              const uid = String(m.userId || '').toLowerCase();
+              if (email && (deletedUserEmails.includes(email) || removedListForThisProj.includes(email))) return false;
+              if (uid && (deletedUserIds.includes(uid) || removedListForThisProj.includes(uid))) return false;
               return true;
             });
 
@@ -750,7 +769,11 @@ export const DMSProvider = ({ children }) => {
             }
 
             const assignedProjects = projectsWithMembers
-              .filter((p) => (p.members || []).some((m) => String(m.userId) === buId || (m.email && m.email.toLowerCase() === emailKey)))
+              .filter((p) => {
+                const removedList = (removedProjMembersMap[p.id] || []).map((x) => String(x).toLowerCase());
+                if (removedList.includes(emailKey) || removedList.includes(buId.toLowerCase())) return false;
+                return (p.members || []).some((m) => String(m.userId) === buId || (m.email && m.email.toLowerCase() === emailKey));
+              })
               .map((p) => p.id);
 
             let userPerms = {
@@ -785,9 +808,14 @@ export const DMSProvider = ({ children }) => {
 
           // Ensure project-assigned members are merged (keep unregistered as invited!)
           projectsWithMembers.forEach((p) => {
+            const removedList = (removedProjMembersMap[p.id] || []).map((x) => String(x).toLowerCase());
             p.members.forEach((m) => {
               if (m.email) {
                 const emailKey = m.email.toLowerCase();
+                const mUid = String(m.userId || '').toLowerCase();
+                if (removedList.includes(emailKey) || removedList.includes(mUid)) {
+                  return;
+                }
                 if (deletedUserEmails.includes(emailKey) || (m.userId && deletedUserIds.includes(String(m.userId)))) {
                   return;
                 }
@@ -937,22 +965,22 @@ export const DMSProvider = ({ children }) => {
     }
   }, []);
 
-  const [auditPagination, setAuditPagination] = useState({
-    total: 0,
-    page: 1,
-    limit: 10,
-    totalPages: 1,
-    hasNextPage: false,
-    hasPrevPage: false,
+  const [auditPagination, setAuditPagination] = useState(() => {
+    const savedTotal = Number(localStorage.getItem('kt_dms_audit_total'));
+    return {
+      total: !isNaN(savedTotal) && savedTotal > 0 ? savedTotal : 0,
+      page: 1,
+      limit: 500,
+      totalPages: 1,
+      hasNextPage: false,
+      hasPrevPage: false,
+    };
   });
 
-  const loadBackendAuditLogs = useCallback(async (page = 1, limit = 50, projectId = null) => {
+  const loadBackendAuditLogs = useCallback(async (page = 1, limit = 500, projectId = null) => {
     try {
       const res = await getAuditLogsService(projectId, page, limit);
       if (res && res.success && Array.isArray(res.data)) {
-        if (res.pagination) {
-          setAuditPagination(res.pagination);
-        }
 
         const mappedBackendLogs = res.data.map((bLog) => {
           let userName = 'System Admin';
@@ -1095,8 +1123,16 @@ export const DMSProvider = ({ children }) => {
 
         setLogs(mappedBackendLogs);
 
-        const totalEntries = res.pagination?.total || mappedBackendLogs.length;
+        const totalEntries = res.pagination?.total ?? (res.count ?? mappedBackendLogs.length);
         const totalPages = res.pagination?.totalPages || Math.max(1, Math.ceil(totalEntries / limit));
+
+        if (totalEntries !== undefined && totalEntries !== null) {
+          try {
+            localStorage.setItem('kt_dms_audit_total', String(totalEntries));
+          } catch (e) {
+            // ignore
+          }
+        }
 
         setAuditPagination({
           total: totalEntries,
@@ -1278,7 +1314,7 @@ export const DMSProvider = ({ children }) => {
         }
       });
 
-      await loadBackendAuditLogs(1, 10);
+      await loadBackendAuditLogs(1, 500);
     } catch (e) {
       console.warn('Failed to record audit log:', e);
     }
@@ -2472,7 +2508,7 @@ export const DMSProvider = ({ children }) => {
     return inviteUser(userData);
   };
 
-  const updateUserPermissions = async (userId, newPermissions, newProjectIds) => {
+  const updateUserPermissions = async (userId, newPermissions, newProjectIds, specificProjectId = null) => {
     if (!canManageUsers) {
       addToast('Only Admins can modify permissions.', 'error');
       return false;
@@ -2483,7 +2519,10 @@ export const DMSProvider = ({ children }) => {
 
     const backendPerms = frontendPermissionsToBackend(newPermissions);
 
-    const targetProjects = Array.isArray(newProjectIds) ? newProjectIds : targetUser.projectIds || [];
+    const targetProjects = specificProjectId 
+      ? [specificProjectId] 
+      : (Array.isArray(newProjectIds) ? newProjectIds : targetUser.projectIds || []);
+
     for (const projId of targetProjects) {
       try {
         await updateMemberPermissionsService({
@@ -2500,7 +2539,7 @@ export const DMSProvider = ({ children }) => {
       prev.map((u) => {
         if (u.id === userId) {
           const updated = { ...u, permissions: { ...u.permissions, ...newPermissions } };
-          if (Array.isArray(newProjectIds)) {
+          if (Array.isArray(newProjectIds) && !specificProjectId) {
             updated.projectIds = newProjectIds;
           }
           return updated;
@@ -2509,72 +2548,47 @@ export const DMSProvider = ({ children }) => {
       })
     );
 
-    if (Array.isArray(newProjectIds)) {
-      setProjects((prev) =>
-        prev.map((proj) => {
-          const shouldBeMember = newProjectIds.includes(proj.id);
-          const membersList = proj.members || [];
-          const isMember = membersList.some((m) => m.userId === userId);
-
-          if (shouldBeMember && !isMember) {
+    setProjects((prev) =>
+      prev.map((proj) => {
+        if (!targetProjects.includes(proj.id)) return proj;
+        return {
+          ...proj,
+          members: (proj.members || []).map((m) => {
+            const matches = m.userId === userId || (m.email && targetUser.email && m.email.toLowerCase() === targetUser.email.toLowerCase());
+            if (!matches) return m;
             return {
-              ...proj,
-              members: [
-                ...membersList,
-                {
-                  userId,
-                  permissions: {
-                    canView: newPermissions.canView !== false,
-                    canUpload: !!newPermissions.canUpload,
-                    canEdit: !!newPermissions.canEdit,
-                    canDelete: !!newPermissions.canDelete,
-                    canDownload: !!newPermissions.canDownload,
-                  },
-                },
-              ],
+              ...m,
+              permissions: {
+                canView: newPermissions.canView !== false,
+                canUpload: !!newPermissions.canUpload,
+                canEdit: !!newPermissions.canEdit,
+                canDelete: !!newPermissions.canDelete,
+                canDownload: !!newPermissions.canDownload,
+              },
             };
-          } else if (!shouldBeMember && isMember) {
-            return {
-              ...proj,
-              members: membersList.filter((m) => m.userId !== userId),
-            };
-          } else if (shouldBeMember && isMember) {
-            return {
-              ...proj,
-              members: membersList.map((m) =>
-                m.userId === userId
-                  ? {
-                      ...m,
-                      permissions: {
-                        canView: newPermissions.canView !== false,
-                        canUpload: !!newPermissions.canUpload,
-                        canEdit: !!newPermissions.canEdit,
-                        canDelete: !!newPermissions.canDelete,
-                        canDownload: !!newPermissions.canDownload,
-                      },
-                    }
-                  : m
-              ),
-            };
-          }
-          return proj;
-        })
-      );
-    }
+          }),
+        };
+      })
+    );
 
     const changes = Object.entries(newPermissions)
       .map(([k, v]) => `${k.replace('can', '')}: ${v ? 'Enabled' : 'Disabled'}`)
       .join(', ');
 
+    const targetProjName = specificProjectId ? (projects.find(p => p.id === specificProjectId)?.name || specificProjectId) : 'all projects';
+
     recordAuditLog(
       'PERMISSION_UPDATE',
       'Updated Permissions',
       targetUser.name,
-      `New configuration: ${changes}`,
+      `New configuration for ${targetProjName}: ${changes}`,
       'Access Control',
-      'success'
+      'success',
+      specificProjectId || null,
+      specificProjectId ? targetProjName : null
     );
-    addToast(`Permissions updated for ${targetUser.name}.`, 'success');
+    addToast(`Permissions updated for ${targetUser.name}${specificProjectId ? ` in ${targetProjName}` : ''}.`, 'success');
+    await loadBackendProjects();
     return true;
   };
 
@@ -2753,7 +2767,71 @@ export const DMSProvider = ({ children }) => {
       }
     }
 
-    // 2. Sync member permissions and invitations with backend if members provided
+    // 2. Identify removed members vs included members
+    let removedProjMembersMap = {};
+    try {
+      removedProjMembersMap = JSON.parse(localStorage.getItem('kt_dms_removed_project_members') || '{}');
+    } catch {}
+    if (!removedProjMembersMap[projectId]) {
+      removedProjMembersMap[projectId] = [];
+    }
+
+    if (Array.isArray(updateData.members)) {
+      const newMemberEmails = new Set(
+        updateData.members.map((m) => (m.email || '').toLowerCase()).filter(Boolean)
+      );
+      const newMemberIds = new Set(
+        updateData.members.map((m) => String(m.userId || '')).filter(Boolean)
+      );
+
+      // Members that were in targetProj before, but are NOT in updateData.members
+      const removedMembers = (targetProj.members || []).filter((prevM) => {
+        const pEmail = (prevM.email || '').toLowerCase();
+        const pId = String(prevM.userId || '');
+        if (pEmail && (pEmail === currentAdminEmail || pEmail === 'admin1@gmail.com')) return false;
+        if (pId && (pId === currentUser.id || pId === 'u-admin')) return false;
+        const stillIncluded = (pEmail && newMemberEmails.has(pEmail)) || (pId && newMemberIds.has(pId));
+        return !stillIncluded;
+      });
+
+      // Revoke backend permissions for unselected members & add to removed list
+      const revokeTasks = removedMembers.map(async (rm) => {
+        const rmEmail = (rm.email || '').toLowerCase();
+        const rmId = String(rm.userId || '');
+        if (rmEmail && !removedProjMembersMap[projectId].includes(rmEmail)) {
+          removedProjMembersMap[projectId].push(rmEmail);
+        }
+        if (rmId && !removedProjMembersMap[projectId].includes(rmId)) {
+          removedProjMembersMap[projectId].push(rmId);
+        }
+
+        if (rmId && /^[0-9a-fA-F]{24}$/.test(rmId)) {
+          try {
+            await updateMemberPermissionsService({
+              projectId,
+              userId: rmId,
+              permissions: [],
+            });
+          } catch (revokeErr) {
+            console.warn('Revoke member permissions notice:', revokeErr.message);
+          }
+        }
+      });
+      await Promise.allSettled(revokeTasks);
+
+      // Re-included members should be cleared from removed list
+      updateData.members.forEach((im) => {
+        const imEmail = (im.email || '').toLowerCase();
+        const imId = String(im.userId || '');
+        removedProjMembersMap[projectId] = (removedProjMembersMap[projectId] || []).filter(
+          (x) => x.toLowerCase() !== imEmail && x !== imId
+        );
+      });
+
+      localStorage.setItem('kt_dms_removed_project_members', JSON.stringify(removedProjMembersMap));
+    }
+
+    // 3. Sync member permissions and invitations with backend if members provided
     if (Array.isArray(updateData.members) && /^[0-9a-fA-F]{24}$/.test(projectId)) {
       const syncTasks = updateData.members
         .filter((m) => {
@@ -2980,7 +3058,7 @@ export const DMSProvider = ({ children }) => {
     return true;
   };
 
-  const removeProjectMember = (projectId, userId) => {
+  const removeProjectMember = async (projectId, userId) => {
     if (currentUser.role !== 'Admin') {
       addToast('Permission Denied: Only Administrators can remove project members.', 'error');
       return false;
@@ -2994,12 +3072,37 @@ export const DMSProvider = ({ children }) => {
     if (!proj) return false;
     const targetUser = users.find((u) => u.id === userId);
 
+    let removedProjMembersMap = {};
+    try {
+      removedProjMembersMap = JSON.parse(localStorage.getItem('kt_dms_removed_project_members') || '{}');
+    } catch {}
+    if (!removedProjMembersMap[projectId]) removedProjMembersMap[projectId] = [];
+    if (userId && !removedProjMembersMap[projectId].includes(userId)) {
+      removedProjMembersMap[projectId].push(userId);
+    }
+    if (targetUser?.email && !removedProjMembersMap[projectId].includes(targetUser.email.toLowerCase())) {
+      removedProjMembersMap[projectId].push(targetUser.email.toLowerCase());
+    }
+    localStorage.setItem('kt_dms_removed_project_members', JSON.stringify(removedProjMembersMap));
+
+    if (userId && /^[0-9a-fA-F]{24}$/.test(userId)) {
+      try {
+        await updateMemberPermissionsService({
+          projectId,
+          userId,
+          permissions: [],
+        });
+      } catch (err) {
+        console.warn('Revoke permissions notice:', err.message);
+      }
+    }
+
     setProjects((prev) =>
       prev.map((p) => {
         if (p.id !== projectId) return p;
         return {
           ...p,
-          members: (p.members || []).filter((m) => m.userId !== userId),
+          members: (p.members || []).filter((m) => m.userId !== userId && (!m.email || !targetUser?.email || m.email.toLowerCase() !== targetUser.email.toLowerCase())),
           updatedAt: 'Just now',
         };
       })
@@ -3014,6 +3117,7 @@ export const DMSProvider = ({ children }) => {
       'info'
     );
     addToast(`${targetUser ? targetUser.name : 'User'} removed from ${proj.name}.`, 'info');
+    await loadBackendProjects();
     return true;
   };
 

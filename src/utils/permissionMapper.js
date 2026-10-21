@@ -12,11 +12,12 @@ export const backendPermissionsToFrontend = (permissions = []) => {
 };
 
 export const frontendPermissionsToBackend = (perms = {}) => {
+  if (!perms || perms.canView === false) return [];
   const result = [];
   if (perms.canView !== false) result.push('read');
   if (perms.canUpload) result.push('create');
   if (perms.canEdit) result.push('update');
   if (perms.canDelete) result.push('delete');
 
-  return result.length > 0 ? result : ['read'];
+  return result;
 };

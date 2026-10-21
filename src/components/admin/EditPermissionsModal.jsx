@@ -3,10 +3,11 @@ import { X, ShieldCheck, Check, AlertCircle, User } from 'lucide-react';
 import { useDMS } from '../../context/DMSContext';
 import { useScrollLock } from '../../hooks/useScrollLock';
 
-export const EditPermissionsModal = ({ user, isOpen, onClose }) => {
+export const EditPermissionsModal = ({ user, isOpen, onClose, initialProjectId = 'all' }) => {
   useScrollLock(isOpen);
   const { updateUserPermissions, projects } = useDMS();
 
+  const [targetProjectId, setTargetProjectId] = useState('all');
   const [permissions, setPermissions] = useState({
     canView: true,
     canUpload: false,
@@ -18,6 +19,30 @@ export const EditPermissionsModal = ({ user, isOpen, onClose }) => {
   const [userProjectIds, setUserProjectIds] = useState([]);
 
   useEffect(() => {
+    if (!user) return;
+    const assigned = projects
+      .filter((p) => p.members?.some((m) => m.userId === user.id || (m.email && user.email && m.email.toLowerCase() === user.email.toLowerCase())))
+      .map((p) => p.id);
+    setUserProjectIds(assigned);
+
+    const activeProj = initialProjectId && assigned.includes(initialProjectId) ? initialProjectId : 'all';
+    setTargetProjectId(activeProj);
+
+    if (activeProj !== 'all') {
+      const proj = projects.find((p) => p.id === activeProj);
+      const m = proj?.members?.find((mem) => mem.userId === user.id || (mem.email && user.email && mem.email.toLowerCase() === user.email.toLowerCase()));
+      if (m?.permissions) {
+        setPermissions({
+          canView: m.permissions.canView !== false,
+          canUpload: !!m.permissions.canUpload,
+          canEdit: !!m.permissions.canEdit,
+          canDelete: !!m.permissions.canDelete,
+          canDownload: m.permissions.canDownload !== false,
+        });
+        return;
+      }
+    }
+
     if (user?.permissions) {
       setPermissions({
         canView: user.permissions.canView !== false,
@@ -27,13 +52,7 @@ export const EditPermissionsModal = ({ user, isOpen, onClose }) => {
         canDownload: user.permissions.canDownload !== false,
       });
     }
-    if (user && projects) {
-      const assigned = projects
-        .filter((p) => p.members?.some((m) => m.userId === user.id))
-        .map((p) => p.id);
-      setUserProjectIds(assigned);
-    }
-  }, [user, projects]);
+  }, [user, projects, initialProjectId, isOpen]);
 
   if (!isOpen || !user) return null;
 
@@ -47,9 +66,41 @@ export const EditPermissionsModal = ({ user, isOpen, onClose }) => {
     );
   };
 
+  const handleTargetProjectChange = (projId) => {
+    setTargetProjectId(projId);
+    if (projId !== 'all') {
+      const proj = projects.find((p) => p.id === projId);
+      const m = proj?.members?.find((mem) => mem.userId === user.id || (mem.email && user.email && mem.email.toLowerCase() === user.email.toLowerCase()));
+      if (m?.permissions) {
+        setPermissions({
+          canView: m.permissions.canView !== false,
+          canUpload: !!m.permissions.canUpload,
+          canEdit: !!m.permissions.canEdit,
+          canDelete: !!m.permissions.canDelete,
+          canDownload: m.permissions.canDownload !== false,
+        });
+        return;
+      }
+    }
+    if (user?.permissions) {
+      setPermissions({
+        canView: user.permissions.canView !== false,
+        canUpload: !!user.permissions.canUpload,
+        canEdit: !!user.permissions.canEdit,
+        canDelete: !!user.permissions.canDelete,
+        canDownload: user.permissions.canDownload !== false,
+      });
+    }
+  };
+
   const handleSave = async (e) => {
     e.preventDefault();
-    await updateUserPermissions(user.id, permissions, userProjectIds);
+    await updateUserPermissions(
+      user.id,
+      permissions,
+      userProjectIds,
+      targetProjectId === 'all' ? null : targetProjectId
+    );
     onClose();
   };
 
@@ -126,12 +177,40 @@ export const EditPermissionsModal = ({ user, isOpen, onClose }) => {
             </div>
           )}
 
+          {/* Project Target Selector for Granular Permissions */}
+          {userProjectIds.length > 0 && (
+            <div className="bg-sky-50/70 p-3 rounded-2xl border border-sky-100">
+              <label className="block text-[11px] font-bold text-[#0A2540] mb-1">
+                Configure Permissions For:
+              </label>
+              <select
+                value={targetProjectId}
+                onChange={(e) => handleTargetProjectChange(e.target.value)}
+                className="w-full px-3 py-2 text-xs font-semibold bg-white border border-sky-200 rounded-xl text-slate-800 focus:outline-hidden focus:ring-2 focus:ring-[#00A3E0]/30 cursor-pointer"
+              >
+                <option value="all">🌐 All Assigned Projects (Unified)</option>
+                {projects
+                  .filter((p) => userProjectIds.includes(p.id))
+                  .map((p) => (
+                    <option key={p.id} value={p.id}>
+                      📁 Project: {p.name}
+                    </option>
+                  ))}
+              </select>
+              <p className="text-[10px] text-slate-500 mt-1">
+                {targetProjectId === 'all'
+                  ? 'Selected permissions will apply across all assigned projects.'
+                  : `Selected permissions will apply specifically to "${projects.find((p) => p.id === targetProjectId)?.name}".`}
+              </p>
+            </div>
+          )}
+
           <div className="flex items-center justify-between">
             <p className="text-xs text-slate-600">
-              Granular actions allowed for this user:
+              Granular actions allowed {targetProjectId !== 'all' ? `in ${projects.find((p) => p.id === targetProjectId)?.name}` : 'for this user'}:
             </p>
             <span className="text-[10px] text-slate-400 font-medium">
-              View access included with projects
+              View access included
             </span>
           </div>
 

@@ -22,7 +22,7 @@ import {
 import { useDMS } from '../../context/DMSContext';
 
 export const AuditLogs = () => {
-  const { logs, projects = [], files = [], currentUser, setCurrentUserId, canViewLogs, addToast, loadBackendAuditLogs } = useDMS();
+  const { logs, projects = [], files = [], currentUser, setCurrentUserId, canViewLogs, addToast, loadBackendAuditLogs, auditPagination } = useDMS();
 
   const [logSearch, setLogSearch] = useState('');
   const [selectedProjectFilter, setSelectedProjectFilter] = useState('all');
@@ -47,7 +47,7 @@ export const AuditLogs = () => {
 
   useEffect(() => {
     if (loadBackendAuditLogs) {
-      loadBackendAuditLogs(1, 100);
+      loadBackendAuditLogs(1, 500);
     }
   }, [loadBackendAuditLogs]);
 
@@ -69,7 +69,7 @@ export const AuditLogs = () => {
     setIsRefreshing(true);
     if (loadBackendAuditLogs) {
       const pId = selectedProjectFilter !== 'all' ? selectedProjectFilter : null;
-      await loadBackendAuditLogs(1, 100, pId);
+      await loadBackendAuditLogs(1, 500, pId);
     }
     setTimeout(() => setIsRefreshing(false), 500);
     addToast('Audit logs refreshed from backend!', 'info');
@@ -323,7 +323,9 @@ export const AuditLogs = () => {
               Audit Trail Entries
             </span>
             <span className="text-[11px] px-2 py-0.5 rounded-full bg-sky-100 text-[#0284C7] font-bold">
-              {filteredLogs.length} events
+              {selectedProjectFilter === 'all' && !logSearch && auditPagination?.total
+                ? `${Number(auditPagination.total).toLocaleString()} events`
+                : `${Number(filteredLogs.length).toLocaleString()} events`}
             </span>
             {selectedProjectFilter !== 'all' && (
               <span className="text-[10px] px-2 py-0.5 rounded-full bg-[#0A2540] text-white font-semibold">
