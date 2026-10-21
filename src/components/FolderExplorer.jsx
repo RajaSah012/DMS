@@ -7,7 +7,8 @@ import {
   Trash2, 
   FolderOpen,
   X,
-  Check
+  Check,
+  Loader2
 } from 'lucide-react';
 import { useDMS } from '../context/DMSContext';
 
@@ -29,6 +30,7 @@ export const FolderExplorer = () => {
 
   const [isCreating, setIsCreating] = useState(false);
   const [newFolderName, setNewFolderName] = useState('');
+  const [isCreatingFolder, setIsCreatingFolder] = useState(false);
 
   // Fetch folders for current level from backend whenever project or folder changes
   useEffect(() => {
@@ -65,16 +67,21 @@ export const FolderExplorer = () => {
 
   const handleCreate = async (e) => {
     e.preventDefault();
-    if (!newFolderName.trim()) return;
-    const created = await createSubfolder({
-      name: newFolderName.trim(),
-      projectId: selectedProject,
-      parentFolderId: currentFolderId,
-    });
-    setNewFolderName('');
-    setIsCreating(false);
-    if (created && loadProjectFolders) {
-      loadProjectFolders(selectedProject, currentFolderId);
+    if (!newFolderName.trim() || isCreatingFolder) return;
+    setIsCreatingFolder(true);
+    try {
+      const created = await createSubfolder({
+        name: newFolderName.trim(),
+        projectId: selectedProject,
+        parentFolderId: currentFolderId,
+      });
+      setNewFolderName('');
+      setIsCreating(false);
+      if (created && loadProjectFolders) {
+        await loadProjectFolders(selectedProject, currentFolderId);
+      }
+    } finally {
+      setIsCreatingFolder(false);
     }
   };
 
@@ -191,25 +198,47 @@ export const FolderExplorer = () => {
             type="text"
             autoFocus
             required
+            disabled={isCreatingFolder}
             placeholder={activeCurrentFolder ? `Subfolder name inside "${activeCurrentFolder.name}"...` : "Folder name (e.g. Invoices, Contracts)..."}
             value={newFolderName}
             onChange={(e) => setNewFolderName(e.target.value)}
-            className="flex-1 px-3 py-1.5 text-xs bg-white border border-sky-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-[#00A3E0]/30 text-slate-800"
+            className={`flex-1 px-3 py-1.5 text-xs bg-white border border-sky-200 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-[#00A3E0]/30 text-slate-800 ${
+              isCreatingFolder ? 'opacity-60 cursor-not-allowed' : ''
+            }`}
           />
           <button
             type="submit"
-            className="px-3 py-1.5 rounded-lg bg-[#00A3E0] hover:bg-[#0284C7] text-white text-xs font-bold flex items-center gap-1 shadow-xs cursor-pointer"
+            disabled={!newFolderName.trim() || isCreatingFolder}
+            className={`px-3 py-1.5 rounded-lg text-white text-xs font-bold flex items-center gap-1.5 shadow-xs transition-all ${
+              isCreatingFolder
+                ? 'bg-[#00A3E0]/80 cursor-wait'
+                : !newFolderName.trim()
+                ? 'bg-slate-300 cursor-not-allowed shadow-none'
+                : 'bg-[#00A3E0] hover:bg-[#0284C7] cursor-pointer'
+            }`}
           >
-            <Check className="w-3.5 h-3.5" />
-            <span>Create</span>
+            {isCreatingFolder ? (
+              <>
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                <span>Creating...</span>
+              </>
+            ) : (
+              <>
+                <Check className="w-3.5 h-3.5" />
+                <span>Create</span>
+              </>
+            )}
           </button>
           <button
             type="button"
+            disabled={isCreatingFolder}
             onClick={() => {
               setIsCreating(false);
               setNewFolderName('');
             }}
-            className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-200 cursor-pointer"
+            className={`p-1.5 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-200 transition-colors ${
+              isCreatingFolder ? 'opacity-40 cursor-not-allowed' : 'cursor-pointer'
+            }`}
           >
             <X className="w-4 h-4" />
           </button>

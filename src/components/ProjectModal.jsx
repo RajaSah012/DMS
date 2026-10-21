@@ -15,7 +15,8 @@ import {
   Edit3,
   Download,
   FolderKanban,
-  User
+  User,
+  Loader2
 } from 'lucide-react';
 import { useDMS } from '../context/DMSContext';
 import { useScrollLock } from '../hooks/useScrollLock';
@@ -38,8 +39,10 @@ export const ProjectModal = ({
 
   const [name, setName] = useState('');
   const [members, setMembers] = useState([]);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   useEffect(() => {
+    setIsSubmitting(false);
     if (project) {
       setName(project.name || '');
       const projMembers = Array.isArray(project.members) ? project.members : [];
@@ -125,25 +128,31 @@ export const ProjectModal = ({
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!name.trim()) return;
+    if (!name.trim() || isSubmitting) return;
 
-    if (isEditMode) {
-      await updateProject(project.id, {
-        name: name.trim(),
-        members: members,
-      });
-    } else {
-      await createProject({
-        name: name.trim(),
-        members: members,
-      });
+    setIsSubmitting(true);
+    try {
+      if (isEditMode) {
+        await updateProject(project.id, {
+          name: name.trim(),
+          members: members,
+        });
+      } else {
+        await createProject({
+          name: name.trim(),
+          members: members,
+        });
+      }
+      onClose();
+    } catch (err) {
+      console.error('Project submission error:', err);
+    } finally {
+      setIsSubmitting(false);
     }
-
-    onClose();
   };
 
   const handleDeleteProject = () => {
-    if (!project) return;
+    if (!project || isSubmitting) return;
     if (window.confirm(`Are you sure you want to delete project "${project.name}"? This action cannot be undone.`)) {
       deleteProject(project.id);
       onClose();
@@ -152,7 +161,7 @@ export const ProjectModal = ({
 
   return (
     <div 
-      onClick={onClose}
+      onClick={isSubmitting ? undefined : onClose}
       className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-200 overscroll-contain overflow-y-auto"
     >
       <div 
@@ -160,6 +169,12 @@ export const ProjectModal = ({
         className="bg-white rounded-3xl shadow-2xl border border-slate-100 w-full max-w-2xl overflow-hidden animate-in zoom-in-95 duration-200 my-auto max-h-[92vh] flex flex-col overscroll-contain"
       >
         
+        {isSubmitting && (
+          <div className="w-full h-1 bg-sky-100 overflow-hidden relative shrink-0">
+            <div className="w-full h-full bg-gradient-to-r from-[#00A3E0] via-sky-400 to-[#0A2540] animate-pulse"></div>
+          </div>
+        )}
+
         <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/50 shrink-0">
           <div className="flex items-center gap-2.5">
             <div className="w-9 h-9 rounded-xl flex items-center justify-center bg-gradient-to-br from-[#00A3E0] to-[#0A2540] text-white shadow-sm">
@@ -176,7 +191,12 @@ export const ProjectModal = ({
           </div>
           <button
             onClick={onClose}
-            className="p-1.5 rounded-full text-slate-400 hover:text-slate-600 hover:bg-slate-200 transition-colors cursor-pointer"
+            disabled={isSubmitting}
+            className={`p-1.5 rounded-full transition-colors ${
+              isSubmitting 
+                ? 'text-slate-300 cursor-not-allowed' 
+                : 'text-slate-400 hover:text-slate-600 hover:bg-slate-200 cursor-pointer'
+            }`}
           >
             <X className="w-5 h-5" />
           </button>
@@ -190,10 +210,13 @@ export const ProjectModal = ({
             <input
               type="text"
               required
+              disabled={isSubmitting}
               placeholder="e.g. Metro Traffic Automation"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              className="w-full px-3.5 py-2.5 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:outline-hidden focus:ring-2 focus:ring-[#00A3E0]/30 focus:border-[#00A3E0] font-medium"
+              className={`w-full px-3.5 py-2.5 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:outline-hidden focus:ring-2 focus:ring-[#00A3E0]/30 focus:border-[#00A3E0] font-medium transition-all ${
+                isSubmitting ? 'opacity-60 cursor-not-allowed' : ''
+              }`}
             />
           </div>
 
@@ -241,7 +264,7 @@ export const ProjectModal = ({
                     <div className="col-span-5 flex items-center gap-2.5 min-w-0 pr-2">
                       <input
                         type="checkbox"
-                        disabled={isAdmin}
+                        disabled={isAdmin || isSubmitting}
                         checked={isMember || isAdmin}
                         onChange={() => toggleMemberInclusion(u.id)}
                         className="w-4 h-4 text-[#00A3E0] rounded border-slate-300 focus:ring-[#00A3E0] cursor-pointer shrink-0 disabled:cursor-not-allowed"
@@ -269,7 +292,7 @@ export const ProjectModal = ({
                       <label className="flex items-center justify-center cursor-pointer">
                         <input
                           type="checkbox"
-                          disabled={isAdmin || !isMember}
+                          disabled={isAdmin || !isMember || isSubmitting}
                           checked={isAdmin || (isMember && !!perms.canUpload)}
                           onChange={() => toggleMemberPermission(u.id, 'canUpload')}
                           className="w-3.5 h-3.5 text-[#00A3E0] rounded border-slate-300 focus:ring-[#00A3E0] cursor-pointer disabled:cursor-not-allowed"
@@ -280,7 +303,7 @@ export const ProjectModal = ({
                       <label className="flex items-center justify-center cursor-pointer">
                         <input
                           type="checkbox"
-                          disabled={isAdmin || !isMember}
+                          disabled={isAdmin || !isMember || isSubmitting}
                           checked={isAdmin || (isMember && !!perms.canEdit)}
                           onChange={() => toggleMemberPermission(u.id, 'canEdit')}
                           className="w-3.5 h-3.5 text-[#00A3E0] rounded border-slate-300 focus:ring-[#00A3E0] cursor-pointer disabled:cursor-not-allowed"
@@ -291,7 +314,7 @@ export const ProjectModal = ({
                       <label className="flex items-center justify-center cursor-pointer">
                         <input
                           type="checkbox"
-                          disabled={isAdmin || !isMember}
+                          disabled={isAdmin || !isMember || isSubmitting}
                           checked={isAdmin || (isMember && !!perms.canDelete)}
                           onChange={() => toggleMemberPermission(u.id, 'canDelete')}
                           className="w-3.5 h-3.5 text-rose-600 rounded border-slate-300 focus:ring-rose-500 cursor-pointer disabled:cursor-not-allowed"
@@ -302,7 +325,7 @@ export const ProjectModal = ({
                       <label className="flex items-center justify-center cursor-pointer">
                         <input
                           type="checkbox"
-                          disabled={isAdmin || !isMember}
+                          disabled={isAdmin || !isMember || isSubmitting}
                           checked={isAdmin || (isMember && perms.canDownload !== false)}
                           onChange={() => toggleMemberPermission(u.id, 'canDownload')}
                           className="w-3.5 h-3.5 text-emerald-600 rounded border-slate-300 focus:ring-emerald-500 cursor-pointer disabled:cursor-not-allowed"
@@ -325,7 +348,10 @@ export const ProjectModal = ({
               <button
                 type="button"
                 onClick={handleDeleteProject}
-                className="flex items-center gap-1 px-3 py-2 text-rose-600 hover:bg-rose-50 text-xs font-semibold rounded-xl transition-colors cursor-pointer"
+                disabled={isSubmitting}
+                className={`flex items-center gap-1 px-3 py-2 text-rose-600 hover:bg-rose-50 text-xs font-semibold rounded-xl transition-colors ${
+                  isSubmitting ? 'opacity-40 cursor-not-allowed' : 'cursor-pointer'
+                }`}
               >
                 <Trash2 className="w-3.5 h-3.5" />
                 <span>Delete Project</span>
@@ -338,17 +364,37 @@ export const ProjectModal = ({
               <button
                 type="button"
                 onClick={onClose}
-                className="px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-xl transition-colors cursor-pointer"
+                disabled={isSubmitting}
+                className={`px-4 py-2 text-xs font-semibold rounded-xl transition-colors ${
+                  isSubmitting 
+                    ? 'text-slate-300 cursor-not-allowed' 
+                    : 'text-slate-600 hover:bg-slate-100 cursor-pointer'
+                }`}
               >
                 Cancel
               </button>
               <button
                 type="submit"
-                disabled={!name.trim()}
-                className="px-5 py-2 text-xs font-bold text-white bg-[#00A3E0] hover:bg-[#0284C7] disabled:bg-slate-300 rounded-xl shadow-md transition-all cursor-pointer flex items-center gap-1.5"
+                disabled={!name.trim() || isSubmitting}
+                className={`px-5 py-2 text-xs font-bold text-white rounded-xl shadow-md transition-all flex items-center gap-2 ${
+                  isSubmitting
+                    ? 'bg-[#00A3E0]/80 cursor-wait'
+                    : !name.trim()
+                    ? 'bg-slate-300 cursor-not-allowed shadow-none'
+                    : 'bg-[#00A3E0] hover:bg-[#0284C7] hover:shadow-lg cursor-pointer active:scale-95'
+                }`}
               >
-                <Check className="w-3.5 h-3.5" />
-                <span>{isEditMode ? 'Save Changes' : 'Create Project'}</span>
+                {isSubmitting ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    <span>{isEditMode ? 'Saving Changes...' : 'Creating Project...'}</span>
+                  </>
+                ) : (
+                  <>
+                    <Check className="w-3.5 h-3.5" />
+                    <span>{isEditMode ? 'Save Changes' : 'Create Project'}</span>
+                  </>
+                )}
               </button>
             </div>
           </div>
