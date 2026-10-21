@@ -120,28 +120,33 @@ export const AddUserModal = ({ isOpen, onClose }) => {
   };
 
   const handleSendEmailLink = async (targetEmail, inviteLink) => {
-    const toEmail = targetEmail || email.trim();
+    const toEmail = targetEmail || email.trim() || createdInvite?.user?.email;
     const linkToSend = inviteLink || createdInvite?.inviteLink;
     if (!toEmail || !linkToSend) return;
 
     setIsSendingEmail(true);
     try {
       const pNames = selectedProjectIds.map((id) => projects.find((p) => p.id === id)?.name).filter(Boolean).join(', ');
-      await sendInviteEmailService({
-        email: toEmail,
-        inviteLink: linkToSend,
-        projectName: pNames || 'Workspace Projects',
-      });
+      
+      // Safety timeout: 8 seconds max so slow backend SMTP never hangs the application
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('Email server delivery timed out')), 8000)
+      );
+
+      await Promise.race([
+        sendInviteEmailService({
+          email: toEmail,
+          inviteLink: linkToSend,
+          projectName: pNames || 'Workspace Projects',
+        }),
+        timeoutPromise,
+      ]);
+
       setEmailSent(true);
-      addToast(`Joining invitation sent to ${toEmail}!`, 'success');
+      addToast(`Invitation email delivered to ${toEmail}!`, 'success');
     } catch (err) {
       console.warn('Backend send invite notice:', err.message);
-      // Fallback: Open mailto link so admin can still send it with one click
-      const subject = encodeURIComponent('Invitation to join KasperTech DMS Workspace');
-      const body = encodeURIComponent(`Hello,\n\nYou have been invited to collaborate on KasperTech Document Management System.\n\nPlease click the link below to accept the invitation and complete registration:\n${linkToSend}\n\nBest regards,\nWorkspace Administrator`);
-      window.location.href = `mailto:${encodeURIComponent(toEmail)}?subject=${subject}&body=${body}`;
-      addToast(`Opened mail client with invitation for ${toEmail}`, 'info');
-      setEmailSent(true);
+      addToast(`Invite link generated! You can copy and share it directly with ${toEmail}.`, 'info');
     } finally {
       setIsSendingEmail(false);
     }
@@ -149,7 +154,7 @@ export const AddUserModal = ({ isOpen, onClose }) => {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!email.trim() || selectedProjectIds.length === 0) return;
+    if (!email.trim() || selectedProjectIds.length === 0 || isSubmitting) return;
 
     setIsSubmitting(true);
     try {
@@ -162,15 +167,18 @@ export const AddUserModal = ({ isOpen, onClose }) => {
       });
 
       if (res && res.success) {
+        setCreatedInvite(res);
+        setIsSubmitting(false);
+
+        // Send email in the background without freezing the UI
         if (sendDirectEmail && res.inviteLink) {
-          await handleSendEmailLink(targetEmail, res.inviteLink);
-        } else {
-          addToast(`Invitation generated for ${targetEmail}!`, 'success');
+          handleSendEmailLink(targetEmail, res.inviteLink);
         }
-        handleClose();
       } else {
         setCreatedInvite(null);
       }
+    } catch (err) {
+      console.error('Invite user submission error:', err);
     } finally {
       setIsSubmitting(false);
     }
