@@ -39,6 +39,7 @@ export const AcceptInviteScreen = () => {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isSendingOtp, setIsSendingOtp] = useState(false);
   const [resendCooldown, setResendCooldown] = useState(0);
+  const [receivedOtpHint, setReceivedOtpHint] = useState('');
 
   useEffect(() => {
     let timer;
@@ -106,7 +107,11 @@ export const AcceptInviteScreen = () => {
     setIsSendingOtp(true);
     try {
       if (sendVerificationOtp) {
-        await sendVerificationOtp(email);
+        const res = await sendVerificationOtp(email);
+        if (res?.otp) {
+          setReceivedOtpHint(res.otp);
+          setOtp(res.otp);
+        }
       }
       setStep('otp');
       setResendCooldown(30);
@@ -125,7 +130,11 @@ export const AcceptInviteScreen = () => {
     setIsSendingOtp(true);
     try {
       if (sendVerificationOtp) {
-        await sendVerificationOtp(email);
+        const res = await sendVerificationOtp(email);
+        if (res?.otp) {
+          setReceivedOtpHint(res.otp);
+          setOtp(res.otp);
+        }
       }
       setResendCooldown(30);
     } catch (err) {
@@ -354,6 +363,22 @@ export const AcceptInviteScreen = () => {
                 A 6-digit confirmation code has been generated and sent to <strong>{email}</strong>.
               </p>
             </div>
+
+            {receivedOtpHint && (
+              <div className="p-3 bg-sky-50 border border-sky-200 rounded-xl flex items-center justify-between text-xs text-sky-900 font-medium animate-in fade-in duration-200">
+                <div>
+                  <span className="text-[10px] text-slate-500 block uppercase font-bold tracking-wider">Verification Code:</span>
+                  <span className="font-mono text-base font-extrabold tracking-widest text-[#00A3E0]">{receivedOtpHint}</span>
+                </div>
+                <button 
+                  type="button" 
+                  onClick={() => setOtp(receivedOtpHint)}
+                  className="px-3 py-1.5 bg-white border border-sky-200 rounded-lg text-xs font-bold text-[#00A3E0] hover:bg-sky-100 cursor-pointer shadow-xs active:scale-95 transition-all"
+                >
+                  Auto-Fill
+                </button>
+              </div>
+            )}
 
             <div>
               <label className="block text-xs font-bold text-slate-700 mb-1.5 flex items-center justify-between">
