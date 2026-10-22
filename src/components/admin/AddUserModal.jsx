@@ -128,12 +128,12 @@ export const AddUserModal = ({ isOpen, onClose }) => {
     try {
       const pNames = selectedProjectIds.map((id) => projects.find((p) => p.id === id)?.name).filter(Boolean).join(', ');
       
-      // Safety timeout: 8 seconds max so slow backend SMTP never hangs the application
+      // Safety timeout: 15 seconds to allow cloud SMTP delivery
       const timeoutPromise = new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('Email server delivery timed out')), 8000)
+        setTimeout(() => reject(new Error('Email server delivery timed out')), 15000)
       );
 
-      await Promise.race([
+      const emailRes = await Promise.race([
         sendInviteEmailService({
           email: toEmail,
           inviteLink: linkToSend,
@@ -142,11 +142,16 @@ export const AddUserModal = ({ isOpen, onClose }) => {
         timeoutPromise,
       ]);
 
-      setEmailSent(true);
-      addToast(`Invitation email delivered to ${toEmail}!`, 'success');
+      if (emailRes && emailRes.success) {
+        setEmailSent(true);
+        addToast(`Invitation email successfully sent to ${toEmail}!`, 'success');
+      } else {
+        throw new Error(emailRes?.message || 'Server failed to send email');
+      }
     } catch (err) {
-      console.warn('Backend send invite notice:', err.message);
-      addToast(`Invite link generated! You can copy and share it directly with ${toEmail}.`, 'info');
+      const errMsg = err.response?.data?.message || err.message;
+      console.warn('Backend send invite notice:', errMsg);
+      addToast(`Email notice: ${errMsg}. You can copy and share the invite link directly.`, 'warning');
     } finally {
       setIsSendingEmail(false);
     }
