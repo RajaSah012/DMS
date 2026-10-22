@@ -2399,13 +2399,8 @@ export const DMSProvider = ({ children }) => {
   const sendVerificationOtp = async (email) => {
     try {
       const res = await sendOtpService(email);
-      const returnedOtp = res?.otp || res?.data?.otp;
-      if (returnedOtp) {
-        addToast(`Verification code: ${returnedOtp}`, 'info');
-      } else {
-        addToast(res?.message || `Verification OTP sent to ${email}`, 'info');
-      }
-      return { success: true, message: res?.message, otp: returnedOtp };
+      addToast(res.message || `Verification OTP sent to ${email}`, 'info');
+      return { success: true, message: res.message };
     } catch (err) {
       const msg = err.response?.data?.message || err.message;
       addToast(`OTP Notice: ${msg}`, 'warning');

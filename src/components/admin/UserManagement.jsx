@@ -15,12 +15,9 @@ import {
   User,
   Trash2,
   Search,
-  FolderKanban,
-  Mail,
-  RotateCw
+  FolderKanban
 } from 'lucide-react';
 import { useDMS } from '../../context/DMSContext';
-import { sendInviteEmailService } from '../../services/authService';
 import { AddUserModal } from './AddUserModal';
 import { EditPermissionsModal } from './EditPermissionsModal';
 
@@ -42,36 +39,6 @@ export const UserManagement = () => {
   const [selectedProjectFilter, setSelectedProjectFilter] = useState('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [editingProjectTarget, setEditingProjectTarget] = useState('all');
-  const [sendingEmailForId, setSendingEmailForId] = useState(null);
-
-  const handleResendInviteEmail = async (targetUser) => {
-    if (!targetUser?.email) return;
-    const link = getInviteLink(targetUser.inviteToken || targetUser.id, targetUser.email);
-    setSendingEmailForId(targetUser.id);
-    try {
-      const assignedProjects = projects
-        .filter((p) => p.members?.some((m) => m.userId === targetUser.id || (m.email && targetUser.email && m.email.toLowerCase() === targetUser.email.toLowerCase())))
-        .map((p) => p.name)
-        .join(', ');
-
-      const res = await sendInviteEmailService({
-        email: targetUser.email,
-        inviteLink: link,
-        projectName: assignedProjects || 'Workspace Projects',
-      });
-
-      if (res && res.success) {
-        addToast(`Invitation email successfully sent to ${targetUser.email}!`, 'success');
-      } else {
-        throw new Error(res?.message || 'Server failed to send email');
-      }
-    } catch (err) {
-      const msg = err.response?.data?.message || err.message;
-      addToast(`Email notice: ${msg}. You can copy the link instead.`, 'warning');
-    } finally {
-      setSendingEmailForId(null);
-    }
-  };
 
   const displayedUsers = useMemo(() => {
     let deletedEmails = [];
@@ -452,29 +419,18 @@ export const UserManagement = () => {
                     <td className="py-4 pr-6 pl-3 text-right">
                       <div className="flex items-center justify-end gap-1.5">
                         {user.status === 'invited' && (
-                          <>
-                            <button
-                              onClick={() => handleResendInviteEmail(user)}
-                              disabled={sendingEmailForId === user.id}
-                              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-sky-50 text-[#00A3E0] hover:bg-sky-100 transition-colors cursor-pointer disabled:opacity-50"
-                              title="Send or resend invitation link to user's email"
-                            >
-                              <Mail className={`w-3.5 h-3.5 ${sendingEmailForId === user.id ? 'animate-spin' : ''}`} />
-                              <span>{sendingEmailForId === user.id ? 'Sending...' : 'Send Mail'}</span>
-                            </button>
-                            <button
-                              onClick={() => {
-                                const link = getInviteLink(user.inviteToken || user.id, user.email);
-                                navigator.clipboard.writeText(link).then(() => {
-                                  addToast('Invitation link copied to clipboard!', 'success');
-                                });
-                              }}
-                              className="px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-amber-50 text-amber-800 hover:bg-amber-100 transition-colors cursor-pointer"
-                              title="Copy invitation link"
-                            >
-                              <span>Copy Link</span>
-                            </button>
-                          </>
+                          <button
+                            onClick={() => {
+                              const link = getInviteLink(user.inviteToken || user.id, user.email);
+                              navigator.clipboard.writeText(link).then(() => {
+                                addToast('Invitation link copied to clipboard!', 'success');
+                              });
+                            }}
+                            className="px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-amber-50 text-amber-800 hover:bg-amber-100 transition-colors cursor-pointer"
+                            title="Copy invitation link"
+                          >
+                            <span>Copy Link</span>
+                          </button>
                         )}
                         <button
                           onClick={() => {
