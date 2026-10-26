@@ -35,6 +35,9 @@ import {
 } from '../services/folderService';
 import { getAuditLogsService, createAuditLogService } from '../services/auditService';
 
+// 12-Hour Inactivity Auto-Logout Duration (12 * 60 * 60 * 1000 ms)
+export const INACTIVITY_TIMEOUT_MS = 12 * 60 * 60 * 1000;
+
 const parseDMSHash = (hashStr) => {
   if (!hashStr || hashStr === '#' || typeof hashStr !== 'string') {
     return { tab: null, projectId: null, folderId: null };
@@ -68,6 +71,30 @@ const DMSContext = createContext();
 export const DMSProvider = ({ children }) => {
   try {
     localStorage.removeItem('kt_dms_local_logs');
+
+    // 12-Hour Inactivity Session Expiry Check on Boot/Refresh
+    const isAuth = localStorage.getItem('kt_dms_auth') === 'true';
+    const lastActiveStr = localStorage.getItem('kt_dms_last_activity_time');
+    if (isAuth && lastActiveStr) {
+      const lastActive = parseInt(lastActiveStr, 10);
+      if (lastActive && (Date.now() - lastActive >= INACTIVITY_TIMEOUT_MS)) {
+        try {
+          sessionStorage.setItem('kt_dms_inactivity_logged_out', 'true');
+        } catch {}
+        localStorage.removeItem('admin-token');
+        localStorage.removeItem('admin-email');
+        localStorage.removeItem('admin-name');
+        localStorage.removeItem('user-token');
+        localStorage.removeItem('kt_dms_active_user_id');
+        localStorage.removeItem('kt_dms_auth_role');
+        localStorage.removeItem('kt_dms_user_email');
+        localStorage.removeItem('kt_dms_user_name');
+        localStorage.removeItem('kt_dms_last_activity_time');
+        localStorage.setItem('kt_dms_auth', 'false');
+      }
+    } else if (isAuth && !lastActiveStr) {
+      localStorage.setItem('kt_dms_last_activity_time', String(Date.now()));
+    }
     const cachedAdminEmail = localStorage.getItem('admin-email');
     if (cachedAdminEmail && cachedAdminEmail.toLowerCase() === 'admin1@gmail.com') {
       localStorage.removeItem('admin-email');
@@ -1062,7 +1089,11 @@ export const DMSProvider = ({ children }) => {
               break;
             case 'USER_LOGOUT':
             case 'ADMIN_LOGOUT':
-              actionLabel = (bLog.userType === 'Admin' || bLog.adminId) ? 'Admin Logged Out' : 'Member Logged Out';
+              if (det?.actionLabel) {
+                actionLabel = det.actionLabel;
+              } else {
+                actionLabel = (bLog.userType === 'Admin' || bLog.adminId) ? 'Admin Logged Out' : 'Member Logged Out';
+              }
               if (bLog.userType === 'Admin' || bLog.adminId) {
                 target = 'Admin';
                 if (detailsStr && detailsStr.startsWith('User signed out')) {
@@ -1085,12 +1116,15 @@ export const DMSProvider = ({ children }) => {
               actionLabel = 'Updated Permissions';
               break;
             case 'CREATE_PROJECT':
+            case 'PROJECT_CREATE':
               actionLabel = 'Created Project';
               break;
             case 'UPDATE_PROJECT':
+            case 'PROJECT_UPDATE':
               actionLabel = 'Updated Project';
               break;
             case 'PROJECT_DELETE':
+            case 'DELETE_PROJECT':
               actionLabel = 'Deleted Project';
               break;
             default:
@@ -1121,7 +1155,30 @@ export const DMSProvider = ({ children }) => {
           };
         });
 
-        setLogs(mappedBackendLogs);
+        // Deduplicate simultaneous or duplicate audit logs (e.g. backend + frontend double-log)
+        const dedupedLogs = [];
+        const seenLogSignatures = new Set();
+
+        mappedBackendLogs.forEach((log) => {
+          const normAction = (log.action || '').toUpperCase()
+            .replace('PROJECT_CREATE', 'CREATE_PROJECT')
+            .replace('PROJECT_UPDATE', 'UPDATE_PROJECT')
+            .replace('PROJECT_DELETE', 'DELETE_PROJECT');
+
+          // Round timestamp to 10-second bucket for duplicate detection
+          const timeBucket = Math.floor(new Date(log.timestamp).getTime() / 10000);
+          const targetNorm = (log.target || '').toLowerCase().trim();
+          const userNorm = (log.userEmail || log.userId || log.userName || '').toLowerCase().trim();
+
+          const signature = `${userNorm}_${normAction}_${targetNorm}_${timeBucket}`;
+
+          if (!seenLogSignatures.has(signature)) {
+            seenLogSignatures.add(signature);
+            dedupedLogs.push(log);
+          }
+        });
+
+        setLogs(dedupedLogs);
 
         const totalEntries = res.pagination?.total ?? (res.count ?? mappedBackendLogs.length);
         const totalPages = res.pagination?.totalPages || Math.max(1, Math.ceil(totalEntries / limit));
@@ -1382,6 +1439,7 @@ export const DMSProvider = ({ children }) => {
         setIsAuthenticated(true);
         localStorage.setItem('kt_dms_auth', 'true');
         localStorage.setItem('kt_dms_active_user_id', activeAdmin.id);
+        localStorage.setItem('kt_dms_last_activity_time', String(Date.now()));
         if (typeof window !== 'undefined') {
           window.history.replaceState({ tab: 'all-files', root: true }, '', '#files');
         }
@@ -1492,6 +1550,7 @@ export const DMSProvider = ({ children }) => {
           localStorage.setItem('kt_dms_active_user_id', String(realId));
           localStorage.setItem('kt_dms_user_email', memberEmail);
           localStorage.setItem('kt_dms_user_name', realName);
+          localStorage.setItem('kt_dms_last_activity_time', String(Date.now()));
           if (userRes.data?.token || userRes.token) {
             localStorage.setItem('user-token', userRes.data?.token || userRes.token);
           }
@@ -1540,14 +1599,19 @@ export const DMSProvider = ({ children }) => {
     }
   };
 
-  const logout = async () => {
+  const logout = async (customMessage = null, reason = 'manual') => {
     const isAdmin = currentUser?.role === 'Admin' || !!localStorage.getItem('admin-token') || !!localStorage.getItem('admin-email');
+    const isInactivity = reason === 'inactivity';
     try {
       await recordAuditLog(
         isAdmin ? 'ADMIN_LOGOUT' : 'USER_LOGOUT',
-        isAdmin ? 'Admin Logged Out' : 'Member Logged Out',
+        isInactivity 
+          ? (isAdmin ? 'Admin Auto Logged Out (Inactivity)' : 'Member Auto Logged Out (Inactivity)') 
+          : (isAdmin ? 'Admin Logged Out' : 'Member Logged Out'),
         isAdmin ? 'Admin' : (currentUser?.name || 'Member'),
-        `${isAdmin ? 'Admin' : 'User'} signed out of document workspace`,
+        isInactivity
+          ? `${isAdmin ? 'Admin' : 'User'} automatically signed out after 12 hours of inactivity`
+          : `${isAdmin ? 'Admin' : 'User'} signed out of document workspace`,
         'Authentication',
         'info'
       );
@@ -1564,6 +1628,7 @@ export const DMSProvider = ({ children }) => {
     localStorage.removeItem('kt_dms_auth_role');
     localStorage.removeItem('kt_dms_user_email');
     localStorage.removeItem('kt_dms_user_name');
+    localStorage.removeItem('kt_dms_last_activity_time');
     localStorage.setItem('kt_dms_auth', 'false');
     localStorage.removeItem('kt_dms_active_tab');
     localStorage.removeItem('kt_dms_selected_project');
@@ -1572,8 +1637,114 @@ export const DMSProvider = ({ children }) => {
     if (typeof window !== 'undefined') {
       window.history.replaceState(null, '', window.location.pathname);
     }
-    addToast('You have been logged out.', 'info');
+    addToast(
+      customMessage || 'You have been logged out.',
+      isInactivity ? 'warning' : 'info'
+    );
   };
+
+  // 12-Hour Inactivity Auto-Logout Tracker
+  const logoutRef = useRef(logout);
+  logoutRef.current = logout;
+  const lastRecordedActivityRef = useRef(Date.now());
+
+  // Show inactivity warning toast if user session expired on reload/boot
+  useEffect(() => {
+    try {
+      if (sessionStorage.getItem('kt_dms_inactivity_logged_out') === 'true') {
+        sessionStorage.removeItem('kt_dms_inactivity_logged_out');
+        addToast('You have been logged out due to 12 hours of inactivity.', 'warning');
+      }
+    } catch {}
+  }, [addToast]);
+
+  // Track user movement & auto-logout after 12 hours of inactivity
+  useEffect(() => {
+    if (!isAuthenticated) return;
+
+    // Ensure timestamp is present in storage
+    if (!localStorage.getItem('kt_dms_last_activity_time')) {
+      localStorage.setItem('kt_dms_last_activity_time', String(Date.now()));
+    }
+
+    const checkInactivity = () => {
+      const lastActiveStr = localStorage.getItem('kt_dms_last_activity_time');
+      if (!lastActiveStr) return;
+      const lastActive = parseInt(lastActiveStr, 10);
+      if (isNaN(lastActive)) return;
+
+      const now = Date.now();
+      if (now - lastActive >= INACTIVITY_TIMEOUT_MS) {
+        logoutRef.current('You have been logged out due to 12 hours of inactivity.', 'inactivity');
+      }
+    };
+
+    // User activity handler - throttled to write to localStorage at most once every 15 seconds
+    const handleUserActivity = () => {
+      const now = Date.now();
+      if (now - lastRecordedActivityRef.current > 15000) {
+        lastRecordedActivityRef.current = now;
+        try {
+          localStorage.setItem('kt_dms_last_activity_time', String(now));
+        } catch {}
+      }
+    };
+
+    // Movement & interaction events: mouse, keyboard, touch, scroll, clicks
+    const activityEvents = [
+      'mousemove',
+      'mousedown',
+      'keydown',
+      'touchstart',
+      'scroll',
+      'click',
+      'wheel',
+    ];
+
+    activityEvents.forEach((event) => {
+      window.addEventListener(event, handleUserActivity, { passive: true, capture: true });
+    });
+
+    // Check periodically every 30 seconds
+    const intervalId = setInterval(checkInactivity, 30000);
+
+    // Also check immediately when window gains focus or tab becomes visible (e.g. laptop wake or returning from another tab)
+    const handleVisibilityOrFocus = () => {
+      if (document.visibilityState === 'visible') {
+        checkInactivity();
+      }
+    };
+
+    window.addEventListener('focus', checkInactivity);
+    document.addEventListener('visibilitychange', handleVisibilityOrFocus);
+
+    // Multi-tab sync: if another tab logged out or updated activity time
+    const handleStorageChange = (e) => {
+      if (e.key === 'kt_dms_auth' && e.newValue === 'false') {
+        setIsAuthenticated(false);
+        setCurrentUserId(null);
+      } else if (e.key === 'kt_dms_last_activity_time' && e.newValue) {
+        const remoteTime = parseInt(e.newValue, 10);
+        if (!isNaN(remoteTime) && remoteTime > lastRecordedActivityRef.current) {
+          lastRecordedActivityRef.current = remoteTime;
+        }
+      }
+    };
+    window.addEventListener('storage', handleStorageChange);
+
+    // Run an initial check on mount
+    checkInactivity();
+
+    return () => {
+      clearInterval(intervalId);
+      activityEvents.forEach((event) => {
+        window.removeEventListener(event, handleUserActivity, { capture: true });
+      });
+      window.removeEventListener('focus', checkInactivity);
+      document.removeEventListener('visibilitychange', handleVisibilityOrFocus);
+      window.removeEventListener('storage', handleStorageChange);
+    };
+  }, [isAuthenticated]);
 
   const getProjectPermissions = useCallback((projectId, userId = currentUserId) => {
     const user = users.find((u) => u.id === userId) || currentUser;
@@ -2377,6 +2548,7 @@ export const DMSProvider = ({ children }) => {
       localStorage.setItem('kt_dms_active_user_id', String(finalUserId));
       localStorage.setItem('kt_dms_user_email', finalEmail.toLowerCase());
       localStorage.setItem('kt_dms_user_name', registeredName);
+      localStorage.setItem('kt_dms_last_activity_time', String(Date.now()));
     }
 
     // Reload backend projects so member records are fully synced
@@ -2727,17 +2899,21 @@ export const DMSProvider = ({ children }) => {
       await Promise.allSettled(inviteTasks);
     }
 
-    recordAuditLog(
-      'PROJECT_CREATE',
-      'Created Project',
-      trimmedName,
-      `Created project '${trimmedName}' with ${finalMembers.length} assigned members`,
-      'Project Governance',
-      'success'
-    );
+    // Backend API already records CREATE_PROJECT in MongoDB. Only record manually if running purely in offline/local fallback
+    if (!backendProj) {
+      recordAuditLog(
+        'PROJECT_CREATE',
+        'Created Project',
+        trimmedName,
+        `Created project '${trimmedName}' with ${finalMembers.length} assigned members`,
+        'Project Governance',
+        'success'
+      );
+    }
 
     addToast(`Project "${trimmedName}" created successfully!`, 'success');
     await loadBackendProjects();
+    await loadBackendAuditLogs();
     return newProject;
   };
 
@@ -2972,16 +3148,20 @@ export const DMSProvider = ({ children }) => {
       localStorage.removeItem('kt_dms_selected_project');
     }
 
-    recordAuditLog(
-      'PROJECT_DELETE',
-      'Deleted Project',
-      targetProj.name,
-      `Permanently deleted project '${targetProj.name}' from database and revoked user workspace access`,
-      'Project Governance',
-      'warning'
-    );
+    // Backend deleteProjectService already creates PROJECT_DELETE in MongoDB
+    if (!/^[0-9a-fA-F]{24}$/.test(projectId)) {
+      recordAuditLog(
+        'PROJECT_DELETE',
+        'Deleted Project',
+        targetProj.name,
+        `Permanently deleted project '${targetProj.name}' from database and revoked user workspace access`,
+        'Project Governance',
+        'warning'
+      );
+    }
     addToast(`Project "${targetProj.name}" deleted successfully.`, 'info');
     await loadBackendProjects();
+    await loadBackendAuditLogs();
     return true;
   };
 

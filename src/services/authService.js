@@ -124,30 +124,9 @@ export const sendDirectEmailViaWebhook = async ({ to, subject, html, text }) => 
 export const sendOtpService = async (email) => {
   const userEmail = (email || '').toLowerCase().trim();
   try {
+    // Backend creates OTP in MongoDB and sends the verification email via Google Webhook
     const response = await API.post("/users/send-otp", { email: userEmail });
-    const data = response.data;
-
-    // Deliver OTP email directly via Google Webhook
-    if (data?.otp) {
-      const otpHtml = `
-        <div style="font-family: Arial, sans-serif; padding: 25px; max-width: 500px; border: 1px solid #e2e8f0; border-radius: 12px; background-color: #ffffff; margin: 0 auto;">
-          <h2 style="color: #0A2540; margin-top: 0; font-size: 20px;">Email Verification</h2>
-          <p style="color: #475569; font-size: 14px; line-height: 1.5;">Use the following OTP code to verify your corporate email address for registration:</p>
-          <div style="background-color: #f0f7fd; border: 1px solid #bae6fd; padding: 16px; text-align: center; border-radius: 8px; font-size: 32px; font-weight: 800; letter-spacing: 6px; color: #0284c7; margin: 20px 0;">
-            ${data.otp}
-          </div>
-          <p style="color: #94a3b8; font-size: 12px; line-height: 1.5; margin-bottom: 0;">This OTP is valid for 10 minutes. If you did not request this code, please ignore this email.</p>
-        </div>
-      `;
-
-      sendDirectEmailViaWebhook({
-        to: userEmail,
-        subject: `Your Verification Code: ${data.otp} - KasperTech DMS`,
-        html: otpHtml
-      });
-    }
-
-    return data;
+    return response.data;
   } catch (error) {
     console.error("Send OTP API error:", error);
     throw error;
@@ -173,7 +152,7 @@ export const verifyOtpService = async (email, otp) => {
 
 /**
  * Send workspace joining link to user's email
- * Delivers branded HTML invitation via Google Apps Script Webhook
+ * Backend sends email via Google Webhook; frontend provides fallback if backend fails
  * @param {{ email: string, inviteLink: string, projectName?: string }} data
  * @returns {Promise<{ success: boolean, message: string }>}
  */
@@ -181,36 +160,41 @@ export const sendInviteEmailService = async ({ email, inviteLink, projectName })
   const targetEmail = (email || '').toLowerCase().trim();
   const pName = projectName || 'Workspace Projects';
 
-  // 1. Deliver invitation email directly via Google Webhook
-  const emailHtml = `
-    <div style="font-family: Arial, sans-serif; padding: 25px; max-width: 550px; border: 1px solid #e2e8f0; border-radius: 12px; background-color: #ffffff; margin: 0 auto;">
-      <h2 style="color: #0A2540; margin-top: 0; font-size: 20px;">Workspace Invitation</h2>
-      <p style="color: #475569; font-size: 14px; line-height: 1.6;">You have been invited to collaborate on the <strong>${pName}</strong> project workspace on KasperTech DMS.</p>
-      <div style="margin: 25px 0;">
-        <a href="${inviteLink}" style="background-color: #00A3E0; color: #ffffff; padding: 12px 24px; text-decoration: none; border-radius: 8px; font-weight: bold; display: inline-block; font-size: 14px;">
-          Accept Invitation &amp; Register
-        </a>
-      </div>
-      <p style="color: #94a3b8; font-size: 12px; line-height: 1.5; margin-bottom: 0;">
-        Or copy and paste this link into your browser:<br/>
-        <a href="${inviteLink}" style="color: #00A3E0; word-break: break-all;">${inviteLink}</a>
-      </p>
-    </div>
-  `;
-
-  sendDirectEmailViaWebhook({
-    to: targetEmail,
-    subject: `Invitation to join ${pName} - KasperTech DMS`,
-    html: emailHtml
-  });
-
-  // 2. Also notify backend
+  // 1. Let backend deliver the invitation email (single email delivery)
   try {
-    const response = await API.post("/users/send-invite-email", { email: targetEmail, inviteLink, projectName: pName });
+    const response = await API.post("/users/send-invite-email", { 
+      email: targetEmail, 
+      inviteLink, 
+      projectName: pName 
+    });
     return response.data;
   } catch (error) {
-    console.warn("Backend send-invite API error (handled via Google Webhook):", error.message);
-    return { success: true, message: "Invitation email dispatched successfully" };
+    console.warn("Backend send-invite API failed, using direct webhook fallback:", error.message);
+
+    // 2. Fallback: only if backend fails or times out
+    const emailHtml = `
+      <div style="font-family: Arial, sans-serif; padding: 25px; max-width: 550px; border: 1px solid #e2e8f0; border-radius: 12px; background-color: #ffffff; margin: 0 auto;">
+        <h2 style="color: #0A2540; margin-top: 0; font-size: 20px;">Workspace Invitation</h2>
+        <p style="color: #475569; font-size: 14px; line-height: 1.6;">You have been invited to collaborate on the <strong>${pName}</strong> project workspace on KasperTech DMS.</p>
+        <div style="margin: 25px 0;">
+          <a href="${inviteLink}" style="background-color: #00A3E0; color: #ffffff; padding: 12px 24px; text-decoration: none; border-radius: 8px; font-weight: bold; display: inline-block; font-size: 14px;">
+            Accept Invitation &amp; Register
+          </a>
+        </div>
+        <p style="color: #94a3b8; font-size: 12px; line-height: 1.5; margin-bottom: 0;">
+          Or copy and paste this link into your browser:<br/>
+          <a href="${inviteLink}" style="color: #00A3E0; word-break: break-all;">${inviteLink}</a>
+        </p>
+      </div>
+    `;
+
+    await sendDirectEmailViaWebhook({
+      to: targetEmail,
+      subject: `Invitation to join ${pName} - KasperTech DMS`,
+      html: emailHtml
+    });
+
+    return { success: true, message: "Invitation email dispatched successfully via fallback" };
   }
 };
 
