@@ -292,7 +292,7 @@ export const FolderExplorer = () => {
                           deleteSubfolder(fld.id);
                         }
                       }}
-                      className="opacity-0 group-hover:opacity-100 p-1 rounded-md text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-all cursor-pointer"
+                      className="opacity-70 sm:opacity-0 sm:group-hover:opacity-100 hover:opacity-100 p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-all cursor-pointer shrink-0"
                       title="Delete folder"
                     >
                       <Trash2 className="w-3.5 h-3.5" />

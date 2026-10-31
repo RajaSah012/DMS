@@ -4,7 +4,8 @@ import {
   Bell, 
   ChevronDown,
   X,
-  LogOut
+  LogOut,
+  Menu
 } from 'lucide-react';
 import { useDMS } from '../context/DMSContext';
 
@@ -125,7 +126,18 @@ export const Navbar = ({ onOpenUpload, onToggleMobileMenu }) => {
     <header className="sticky top-0 z-40 bg-white/95 backdrop-blur-md border-b border-slate-200 shadow-xs px-3 sm:px-6 py-1.5 sm:py-2">
       <div className="w-full max-w-[1600px] mx-auto flex items-center justify-between gap-2 sm:gap-4">
         
-        <div className="flex items-center">
+        <div className="flex items-center gap-1.5 sm:gap-2">
+          {/* Mobile/Tablet Menu Drawer Toggle Button */}
+          <button
+            type="button"
+            onClick={onToggleMobileMenu}
+            className="lg:hidden p-1.5 rounded-xl text-slate-600 hover:text-[#0A2540] hover:bg-slate-100 transition-colors cursor-pointer active:scale-95"
+            title="Open Navigation Menu"
+            aria-label="Open Navigation Menu"
+          >
+            <Menu className="w-5 h-5" />
+          </button>
+
           <div className="flex items-center cursor-pointer select-none">
             <img
               src="/logo.png"

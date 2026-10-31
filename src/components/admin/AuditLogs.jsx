@@ -344,7 +344,56 @@ export const AuditLogs = () => {
             </p>
           </div>
         ) : (
-          <div className="overflow-x-auto w-full">
+          <>
+            {/* Mobile View: Touch-Friendly Audit Cards (sm:hidden) */}
+            <div className="sm:hidden divide-y divide-slate-100">
+              {paginatedLogs.map((log) => {
+                const dateObj = new Date(log.timestamp);
+                const timeFormatted = dateObj.toLocaleTimeString([], {
+                  hour: '2-digit',
+                  minute: '2-digit',
+                  second: '2-digit',
+                });
+                const dateFormatted = dateObj.toLocaleDateString('en-US', {
+                  month: 'short',
+                  day: 'numeric',
+                  year: 'numeric'
+                });
+
+                return (
+                  <div key={log.id} className="p-3.5 space-y-2 hover:bg-slate-50/40 transition-colors">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold border ${getActionBadge(log.action)}`}>
+                        {log.actionLabel}
+                      </span>
+                      <div className="text-right text-[10px] text-slate-400">
+                        <span className="font-semibold text-slate-600 mr-1">{timeFormatted}</span>
+                        <span>{dateFormatted}</span>
+                      </div>
+                    </div>
+
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-[10px] text-slate-400 font-medium">Actor:</span>
+                        <span className="text-xs font-bold text-[#0A2540] truncate">{log.userName}</span>
+                      </div>
+                      <p className="text-[11px] font-semibold text-sky-800 break-words mt-0.5">
+                        {log.target}
+                      </p>
+                    </div>
+
+                    {log.details && (
+                      <p className="text-[11px] text-slate-500 bg-slate-50 p-2 rounded-xl border border-slate-100/80 break-words leading-relaxed">
+                        {formatLogDetails(log.details)}
+                      </p>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Desktop & Tablet Table View (hidden sm:block) */}
+            <div className="hidden sm:block overflow-x-auto w-full">
             <table className="w-full text-left border-collapse min-w-[720px]">
               <thead>
                 <tr className="border-b border-slate-100 text-[11px] font-bold text-slate-400 uppercase tracking-wider bg-slate-50/70">
@@ -398,12 +447,13 @@ export const AuditLogs = () => {
               </tbody>
             </table>
           </div>
-        )}
+        </>
+      )}
 
         {/* Pagination Footer */}
         {totalEntries > 0 && (
           <div className="p-4 sm:px-6 border-t border-slate-100 flex flex-col sm:flex-row items-center justify-between gap-3 bg-slate-50/50">
-            <div className="flex items-center gap-2 text-xs text-slate-500">
+            <div className="flex flex-wrap items-center justify-between sm:justify-start gap-2 text-xs text-slate-500 w-full sm:w-auto">
               <span>Showing</span>
               <span className="font-bold text-slate-800">
                 {totalEntries === 0 ? 0 : (currentPage - 1) * pageSize + 1}

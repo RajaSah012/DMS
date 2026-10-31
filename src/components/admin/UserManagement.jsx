@@ -222,7 +222,160 @@ export const UserManagement = () => {
           </span>
         </div>
 
-        <div className="overflow-x-auto w-full">
+        {displayedUsers.length === 0 ? (
+          <div className="text-center py-12 px-4">
+            <div className="w-12 h-12 bg-slate-100 text-slate-400 rounded-full flex items-center justify-center mx-auto mb-2">
+              <Users className="w-6 h-6" />
+            </div>
+            <p className="text-xs font-bold text-slate-700">No users found</p>
+            <p className="text-[11px] text-slate-400 mt-0.5">Try adjusting your search query or project filter.</p>
+          </div>
+        ) : (
+          <>
+            {/* Mobile View: Touch-Friendly User Cards (sm:hidden) */}
+            <div className="sm:hidden divide-y divide-slate-100">
+              {displayedUsers.map((user) => {
+                const isAdmin = user.role === 'Admin';
+                const userAssignedProjects = projects.filter((p) =>
+                  p.members?.some((m) => m.userId === user.id || (m.email && user.email && m.email.toLowerCase() === user.email.toLowerCase()))
+                );
+
+                return (
+                  <div key={user.id} className="p-3.5 space-y-2.5">
+                    {/* User Identity & Status Header */}
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <div className="w-9 h-9 rounded-full bg-sky-50 text-[#00A3E0] flex items-center justify-center shrink-0 border border-sky-100">
+                          <User className="w-4 h-4" />
+                        </div>
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span className="font-bold text-xs text-[#0A2540] truncate max-w-[150px]">
+                              {user.name}
+                            </span>
+                            {user.status === 'invited' && (
+                              <span className="text-[9px] font-extrabold px-1.5 py-0.2 rounded bg-amber-100 text-amber-800 shrink-0">
+                                INVITED
+                              </span>
+                            )}
+                            {isAdmin && (
+                              <span className="text-[9px] font-extrabold px-1.5 py-0.2 rounded bg-sky-100 text-[#00A3E0] shrink-0">
+                                ADMIN
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-[11px] text-slate-400 truncate max-w-[180px]">
+                            {user.email}
+                          </p>
+                        </div>
+                      </div>
+
+                      {/* Status Indicator */}
+                      <div className="shrink-0">
+                        {user.status === 'invited' ? (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-50 text-amber-800 border border-amber-200">
+                            <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse"></span>
+                            Pending
+                          </span>
+                        ) : (
+                          <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold ${
+                            user.status === 'active'
+                              ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                              : 'bg-slate-100 text-slate-500 border border-slate-200'
+                          }`}>
+                            <span className={`w-1.5 h-1.5 rounded-full ${user.status === 'active' ? 'bg-emerald-500' : 'bg-slate-400'}`}></span>
+                            {user.status === 'active' ? 'Active' : 'Suspended'}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Projects Section */}
+                    <div className="bg-slate-50/70 p-2.5 rounded-xl border border-slate-100 space-y-1 text-xs">
+                      <div className="flex items-center justify-between text-[10px] text-slate-400 font-semibold uppercase tracking-wider">
+                        <span>Assigned Projects</span>
+                        <span>{isAdmin ? 'All' : userAssignedProjects.length}</span>
+                      </div>
+                      {isAdmin ? (
+                        <span className="inline-block px-2 py-0.5 rounded-md text-[10px] font-bold bg-slate-100 text-slate-700 border border-slate-200">
+                          All Projects (Root Admin)
+                        </span>
+                      ) : userAssignedProjects.length === 0 ? (
+                        <p className="text-[11px] text-slate-400 italic">No assigned projects</p>
+                      ) : (
+                        <div className="flex flex-wrap gap-1 pt-0.5">
+                          {userAssignedProjects.map((p) => (
+                            <span
+                              key={p.id}
+                              className="px-2 py-0.5 rounded-md text-[10px] font-semibold bg-white text-[#0284C7] border border-sky-100 shadow-2xs"
+                            >
+                              {p.name}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Actions Bar */}
+                    <div className="flex items-center justify-between pt-1 gap-2">
+                      {user.status === 'invited' ? (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const link = getInviteLink(user.inviteToken || user.id, user.email);
+                            navigator.clipboard.writeText(link).then(() => {
+                              addToast('Invitation link copied to clipboard!', 'success');
+                            });
+                          }}
+                          className="flex-1 py-1.5 px-2.5 rounded-xl text-xs font-semibold bg-amber-50 text-amber-800 hover:bg-amber-100 border border-amber-200 text-center transition-colors cursor-pointer"
+                        >
+                          Copy Invite Link
+                        </button>
+                      ) : (
+                        <div className="text-[10px] text-slate-400 font-medium">
+                          {isAdmin ? 'Full System Access' : 'Member Account'}
+                        </div>
+                      )}
+
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelectedUserForPerms(user);
+                            setEditingProjectTarget(selectedProjectFilter);
+                          }}
+                          disabled={isAdmin}
+                          className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-all ${
+                            isAdmin
+                              ? 'text-slate-300 bg-slate-100 cursor-not-allowed'
+                              : 'bg-sky-50 text-[#0284C7] hover:bg-sky-100 border border-sky-200 cursor-pointer active:scale-95'
+                          }`}
+                        >
+                          Permissions
+                        </button>
+                        {!isAdmin && (
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              if (window.confirm(`Are you sure you want to remove user "${user.name}"?`)) {
+                                await deleteUser(user.id);
+                              }
+                            }}
+                            className="p-1.5 rounded-xl text-slate-400 hover:text-rose-600 hover:bg-rose-50 border border-slate-200 transition-colors cursor-pointer"
+                            title="Remove user account"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Desktop & Tablet Table View (hidden sm:block) */}
+            <div className="hidden sm:block overflow-x-auto w-full">
           <table className="w-full text-left border-collapse min-w-[700px]">
             <thead>
               <tr className="border-b border-slate-100 text-[11px] font-bold text-slate-400 uppercase tracking-wider bg-slate-50/70">
@@ -468,6 +621,8 @@ export const UserManagement = () => {
             </tbody>
           </table>
         </div>
+      </>
+    )}
 
       </div>
 
